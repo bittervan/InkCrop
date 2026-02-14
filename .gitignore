@@ -1,1 +1,57 @@
-tests/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific - output files
+*.pdf
+*.png
+*.jpg
+*.jpeg
+output/
+
+# Project specific - debug/test files
+debug_*.png
+sample_*.png
+page_*.png
+test_*.png
+*_test.*
+new_algorithm_test.*
+vertical_pages.*
+correct_pages.*
+page_test_output.*
+final_output.*
+test_output.*
