@@ -80,7 +80,7 @@ Examples:
     is_batch = len(args.inputs) > 1 or (args.output and Path(args.output).is_dir())
 
     # Create processor
-    from .page_detector import VerticalColumnDetector
+    from .detector import VerticalColumnDetector
 
     detector = VerticalColumnDetector()
     processor = CalligraphyProcessor(

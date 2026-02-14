@@ -72,6 +72,8 @@ class PDFGenerator:
         self,
         page_images: List[np.ndarray],
         output_path: str,
+        draw_lines: bool = True,
+        line_margin_mm: float = 10.0,
     ) -> None:
         """
         Create PDF from page images (each image becomes one PDF page)
@@ -79,6 +81,8 @@ class PDFGenerator:
         Args:
             page_images: List of page images (numpy arrays)
             output_path: Output PDF file path
+            draw_lines: Whether to draw lines at top and bottom of content
+            line_margin_mm: Margin in mm from content to lines
         """
         pdf = FPDF(unit="mm", format=self.page_size_mm)
 
@@ -99,13 +103,24 @@ class PDFGenerator:
             img_width_mm = pil_img.width / 300 * 25.4  # Convert pixels to mm at 300 DPI
             img_height_mm = pil_img.height / 300 * 25.4
 
-            # Save to temporary file for FPDF
-            temp_path = f"/tmp/temp_page_{i}.png"
-            pil_img.save(temp_path, format="PNG", dpi=(300, 300))
-
             # Center image on page
             x_offset = (self.page_size_mm[0] - img_width_mm) / 2
             y_offset = (self.page_size_mm[1] - img_height_mm) / 2
+
+            # Draw top line before image
+            if draw_lines:
+                line_y_top = y_offset - line_margin_mm
+                if line_y_top > 0:
+                    pdf.line(
+                        x_offset,
+                        line_y_top,
+                        x_offset + img_width_mm,
+                        line_y_top
+                    )
+
+            # Save to temporary file for FPDF
+            temp_path = f"/tmp/temp_page_{i}.png"
+            pil_img.save(temp_path, format="PNG", dpi=(300, 300))
 
             # Place image on page
             pdf.image(
@@ -115,6 +130,17 @@ class PDFGenerator:
                 w=img_width_mm,
                 h=img_height_mm
             )
+
+            # Draw bottom line after image
+            if draw_lines:
+                line_y_bottom = y_offset + img_height_mm + line_margin_mm
+                if line_y_bottom < self.page_size_mm[1]:
+                    pdf.line(
+                        x_offset,
+                        line_y_bottom,
+                        x_offset + img_width_mm,
+                        line_y_bottom
+                    )
 
         # Save PDF
         pdf.output(output_path)

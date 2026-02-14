@@ -6,7 +6,7 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
-from .page_detector import VerticalColumnDetector
+from .detector import VerticalColumnDetector
 from .pdf import PDFGenerator
 
 
@@ -57,7 +57,7 @@ class CalligraphyProcessor:
         if image is None:
             raise ValueError(f"Failed to load image: {image_path}")
 
-        # Detect character regions (now includes cropping)
+        # Detect character regions
         if self.verbose:
             print("Detecting character regions...")
         char_boxes = self.detector.detect_characters(image)
@@ -66,9 +66,6 @@ class CalligraphyProcessor:
 
         if not char_boxes:
             raise ValueError("No characters detected in image")
-
-        # Get crop bounds for visualization
-        _, crop_bounds = self.detector.preprocess(image)
 
         # Group into columns
         if self.verbose:
@@ -97,8 +94,7 @@ class CalligraphyProcessor:
                 image,
                 char_boxes,
                 columns,
-                page_bounds,
-                crop_bounds=crop_bounds
+                page_bounds
             )
             cv2.imwrite(str(debug_path), vis)
             if self.verbose:
@@ -128,7 +124,6 @@ class CalligraphyProcessor:
             "num_columns": len(columns),
             "num_characters": len(char_boxes),
             "image_size": image.shape,
-            "crop_bounds": crop_bounds,
         }
 
     def process_batch(
