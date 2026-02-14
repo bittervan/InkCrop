@@ -18,6 +18,11 @@ tests_dir="$script_dir/tests"
 outputs_dir="$script_dir/outputs"
 mkdir -p "$outputs_dir"
 
+# 固定参数（与 simple_binary.py 保持一致）
+min_component_area="120"
+bbox_padding="12"
+bbox_detect_max_side="2200"
+
 shopt -s nullglob
 images=(
     "$tests_dir"/*.jpg
@@ -35,6 +40,9 @@ if [ "$total" -eq 0 ]; then
 fi
 
 echo "找到 $total 张图片"
+echo "边界过滤最小连通域面积: $min_component_area"
+echo "边界留白像素: $bbox_padding"
+echo "边界检测最长边: $bbox_detect_max_side"
 echo ""
 
 count=0
@@ -53,7 +61,10 @@ for img in "${images[@]}"; do
     echo "  - 二值图: $(basename "$binary_out")"
     echo "  - 边界图: $(basename "$box_out")"
 
-    if python "$script_dir/simple_binary.py" "$img" "$binary_out" "$box_out"; then
+    if python "$script_dir/simple_binary.py" \
+        "$img" \
+        "$binary_out" \
+        "$box_out"; then
         success=$((success + 1))
         echo "  ✓ 完成"
     else
