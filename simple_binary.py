@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-简单二值化脚本 - 根据面积判断墨迹和背景
+简单二值化脚本（单图）
 输入：一张图片（白纸黑字）
-输出：一张二值化图（墨迹=白色，背景=黑色）
+输出：
+1) 二值化图（墨迹=白色，背景=黑色）
+2) 边界预览图（在原图上画出后续裁切边界）
 """
 import sys
 from pathlib import Path
@@ -13,18 +15,30 @@ import numpy as np
 
 def main():
     if len(sys.argv) < 2:
-        print("用法: python simple_binary.py <输入图片> [输出图片]")
-        print("示例: python simple_binary.py input.jpg output.jpg")
+        print("用法: python simple_binary.py <输入图片> [二值图输出] [边界预览图输出]")
+        print("示例: python simple_binary.py input.jpg outputs/input_binary.jpg outputs/input_crop_box.jpg")
         sys.exit(1)
 
     input_path = sys.argv[1]
+    input_file = Path(input_path)
+    script_dir = Path(__file__).parent
+    outputs_dir = script_dir / "outputs"
+    outputs_dir.mkdir(exist_ok=True)
 
-    # 默认输出路径
+    # 二值图输出路径
     if len(sys.argv) >= 3:
-        output_path = sys.argv[2]
+        binary_output_path = Path(sys.argv[2])
     else:
-        input_file = Path(input_path)
-        output_path = input_file.parent / f"{input_file.stem}_binary{input_file.suffix}"
+        binary_output_path = outputs_dir / f"{input_file.stem}_binary{input_file.suffix}"
+
+    # 边界预览图输出路径
+    if len(sys.argv) >= 4:
+        boxed_output_path = Path(sys.argv[3])
+    else:
+        boxed_output_path = outputs_dir / f"{input_file.stem}_crop_box{input_file.suffix}"
+
+    binary_output_path.parent.mkdir(parents=True, exist_ok=True)
+    boxed_output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # 读取图片
     image = cv2.imread(input_path)
@@ -51,50 +65,58 @@ def main():
         cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
 
-    # 此时 binary_inv 中：
-    # - 原图的白色区域 = 255（背景）
-    # - 原图的黑色区域 = 0（墨迹）
-    # THRESH_BINARY_INV 反转后：
-    # - 白色区域 = 0（原来的背景）
-    # - 黑色区域 = 255（原来的墨迹）
+    # THRESH_BINARY_INV 的目标是让墨迹尽量变成白色（255）
+    # 但对反色输入时可能颠倒，所以后面做一次面积判断纠正
 
     # 计算两种颜色的面积
     white_area = np.sum(binary_inv == 255)  # 255的像素数
-    black_area = np.sum(binary_inv == 0)     # 0的像素数
+    black_area = np.sum(binary_inv == 0)  # 0的像素数
 
     print(f"白色像素数: {white_area} ({white_area/(binary_inv.shape[0]*binary_inv.shape[1])*100:.2f}%)")
     print(f"黑色像素数: {black_area} ({black_area/(binary_inv.shape[0]*binary_inv.shape[1])*100:.2f}%)")
 
-    # 判断：面积大的才是背景（纸张），面积小的是墨迹
-    # 因为输入都是"白纸黑字"，所以：
-    # - 白色面积大 → 白色是背景 → 墨迹是黑色 → 不需要反转
-    # - 白色面积小 → 白色是墨迹 → 墨迹是白色 → 需要反转
-    if white_area > black_area:
-        # 白色面积更大，白色是背景，墨迹是黑色，已经是我们要的
+    # 目标固定为：白色=墨迹，黑色=背景
+    # 墨迹面积通常小于背景面积，因此白色面积较小时视为正确
+    if white_area <= black_area:
         binary = binary_inv
-        mode = "白底黑字（无需反转）"
+        mode = "白色=墨迹（无需反转）"
     else:
-        # 白色面积更小，白色是墨迹，需要反转成黑底白字
         binary = cv2.bitwise_not(binary_inv)
-        mode = "黑底白字（已反转）"
+        mode = "白色占比过大，已反转以保持白色=墨迹"
 
     # 形态学操作清理噪点
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
-    # 保存二值化图
-    cv2.imwrite(str(output_path), binary)
+    # 计算墨迹外接矩形（后续裁切边界）
+    points = cv2.findNonZero(binary)
+    boxed = image.copy()
+    bbox = None
+    if points is not None:
+        x, y, w, h = cv2.boundingRect(points)
+        bbox = (x, y, w, h)
+        cv2.rectangle(boxed, (x, y), (x + w - 1, y + h - 1), (0, 0, 255), 2)
 
-    print(f"\n✓ 已保存二值化图到: {output_path}")
+    # 保存结果
+    cv2.imwrite(str(binary_output_path), binary)
+    cv2.imwrite(str(boxed_output_path), boxed)
+
+    print(f"\n✓ 已保存二值化图到: {binary_output_path}")
+    print(f"✓ 已保存边界预览图到: {boxed_output_path}")
     print(f"  输入图片: {input_path}")
     print(f"  图片大小: {image.shape}")
     print(f"  二值图大小: {binary.shape}")
+    if bbox is None:
+        print("  裁切边界: 未检测到墨迹（整图为空）")
+    else:
+        x, y, w, h = bbox
+        print(f"  裁切边界: x={x}, y={y}, w={w}, h={h}")
     print(f"\n说明:")
     print(f"  - 白色区域 = 墨迹")
     print(f"  - 黑色区域 = 背景（纸张）")
     print(f"  - 模式: {mode}")
-    print(f"  - 使用 Otsu 自动阈值 + 面积判断")
+    print(f"  - 使用 Otsu 自动阈值 + 面积判断 + 外接矩形")
 
 
 if __name__ == "__main__":
