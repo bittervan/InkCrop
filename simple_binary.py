@@ -40,6 +40,37 @@ PDF_PAGE_MARGIN_PT = PDF_PAGE_MARGIN_MM * 72.0 / 25.4
 PDF_IMAGE_JPEG_QUALITY = 90
 
 
+def read_image(path):
+    path_str = str(path)
+    try:
+        data = np.fromfile(path_str, dtype=np.uint8)
+        if data.size > 0:
+            image = cv2.imdecode(data, cv2.IMREAD_COLOR)
+            if image is not None:
+                return image
+    except Exception:
+        pass
+    return cv2.imread(path_str)
+
+
+def write_image(path, image, params=None):
+    path_obj = Path(path)
+    ext = path_obj.suffix if path_obj.suffix else ".png"
+    encode_params = [] if params is None else list(params)
+
+    try:
+        ok, buffer = cv2.imencode(ext, image, encode_params)
+        if ok:
+            buffer.tofile(str(path_obj))
+            return True
+    except Exception:
+        pass
+
+    if params is None:
+        return bool(cv2.imwrite(str(path_obj), image))
+    return bool(cv2.imwrite(str(path_obj), image, encode_params))
+
+
 def get_ink_mask(binary):
     white_pixels = int(cv2.countNonZero(binary))
     black_pixels = int(binary.size - white_pixels)
@@ -643,8 +674,8 @@ def save_columns_to_a4_pdf(image, bbox, boundaries, pdf_output_path):
                 continue
 
             temp_img_path = temp_dir_path / f"page_{page_count:04d}.jpg"
-            ok = cv2.imwrite(
-                str(temp_img_path),
+            ok = write_image(
+                temp_img_path,
                 seg,
                 [cv2.IMWRITE_JPEG_QUALITY, PDF_IMAGE_JPEG_QUALITY]
             )
@@ -696,7 +727,7 @@ def main():
     box_output_path.parent.mkdir(parents=True, exist_ok=True)
     pdf_output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    image = cv2.imread(input_path)
+    image = read_image(input_path)
     if image is None:
         print(f"错误：无法读取图片: {input_path}")
         sys.exit(1)
@@ -764,8 +795,14 @@ def main():
         cv2.rectangle(boxed, (x, y), (x + w - 1, y + h - 1), (0, 0, 255), 2)
         pages = save_columns_to_a4_pdf(image, bbox, boundaries, pdf_output_path)
 
-    cv2.imwrite(str(binary_output_path), binary)
-    cv2.imwrite(str(box_output_path), boxed)
+    binary_saved = write_image(binary_output_path, binary)
+    box_saved = write_image(box_output_path, boxed)
+    if not binary_saved:
+        print(f"错误：无法保存二值化图: {binary_output_path}")
+        sys.exit(1)
+    if not box_saved:
+        print(f"错误：无法保存加框预览图: {box_output_path}")
+        sys.exit(1)
 
     print(f"\n✓ 已保存二值化图到: {binary_output_path}")
     print(f"✓ 已保存加框预览图到: {box_output_path}")

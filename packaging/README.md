@@ -59,6 +59,6 @@ python packaging/build.py --onedir
 
 - 手动触发：
   - GitHub → `Actions` → `Build InkCrop Binaries` → `Run workflow`
-  - 会自动构建 Windows / macOS / Linux 三个平台包并上传 artifacts
+  - 会自动构建 `Windows amd64`、`Linux amd64`、`macOS amd64(Intel)`、`macOS arm64(Apple Silicon)` 并上传 artifacts
 - 自动发布 Release：
-  - 推送标签（例如 `v1.0.0`）后会构建三端并把 `zip` 附件发布到 GitHub Release
+  - 推送标签（例如 `v1.0.0`）后会构建全部平台并把 `zip` 附件发布到 GitHub Release

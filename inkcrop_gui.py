@@ -7,6 +7,7 @@ import shutil
 import sys
 import time
 import traceback
+import locale
 from datetime import datetime
 from pathlib import Path
 
@@ -243,10 +244,24 @@ class InkCropWindow(QMainWindow):
         if self.process is None:
             return
         raw = bytes(self.process.readAllStandardOutput())
-        text = raw.decode("utf-8", errors="replace")
+        text = self._decode_process_output(raw)
         if text:
             self.last_output_at = time.monotonic()
             self._append_log_raw(text)
+
+    @staticmethod
+    def _decode_process_output(raw: bytes) -> str:
+        if not raw:
+            return ""
+        candidates = [locale.getpreferredencoding(False), "utf-8", "gbk", "cp936"]
+        for encoding in candidates:
+            if not encoding:
+                continue
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace")
 
     def _on_process_error(self, _):
         if self.process is None:

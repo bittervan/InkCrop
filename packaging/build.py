@@ -117,7 +117,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.onefile and args.onedir:
-        parser.error("--onefile 和 --onedir 不能同时使用")
+        parser.error("--onefile and --onedir cannot be used together")
 
     onefile = True
     if args.onedir:
