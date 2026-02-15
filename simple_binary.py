@@ -25,6 +25,12 @@ BBOX_DETECT_MAX_SIDE = 2400
 BBOX_PADDING_RATIO = 0.03
 BBOX_PROJ_RATIO = 0.002
 BBOX_MIN_PROJ_COVER_RATIO = 0.85
+SPLIT_VALLEY_PERCENTILE = 24
+SPLIT_MIN_SPACING = 80
+SPLIT_STRONG_VALLEY_RATIO = 0.45
+SPLIT_STRONG_VALLEY_MIN = 12
+SPLIT_REFINE_RADIUS_RATIO = 0.40
+SPLIT_REFINE_RADIUS_MIN = 3
 
 A4_WIDTH = 210.0
 A4_HEIGHT = 297.0
@@ -254,7 +260,7 @@ def detect_split_candidates(ink_roi):
             "candidate_count": 0,
         }
 
-    valley_thresh = float(np.percentile(smooth, 24))
+    valley_thresh = float(np.percentile(smooth, SPLIT_VALLEY_PERCENTILE))
     valley_mask = smooth <= valley_thresh
 
     valley_u8 = (valley_mask.astype(np.uint8) * 255).reshape(1, -1)
@@ -268,59 +274,320 @@ def detect_split_candidates(ink_roi):
     )
     valley_mask = valley_u8.ravel() > 0
 
-    centers_small = []
+    runs_small = []
     start = None
     for i, flag in enumerate(valley_mask):
         if flag and start is None:
             start = i
         elif (not flag) and start is not None:
-            centers_small.append((start + i - 1) // 2)
+            end = i - 1
+            runs_small.append(((start + end) // 2, end - start + 1))
             start = None
     if start is not None:
-        centers_small.append((start + len(valley_mask) - 1) // 2)
+        end = len(valley_mask) - 1
+        runs_small.append(((start + end) // 2, end - start + 1))
 
     edge_margin = max(2, int(round(small_w * 0.01)))
-    centers_small = [
-        c for c in centers_small
+    runs_small = [
+        (c, run_w) for c, run_w in runs_small
         if edge_margin < c < (small_w - edge_margin)
     ]
 
+    candidate_widths = {}
+    candidate_costs = {}
     if scale != 1.0:
-        centers = sorted(set(int(round(c / scale)) for c in centers_small))
+        for c, run_w in runs_small:
+            center = int(round(c / scale))
+            width = max(1, int(round(run_w / scale)))
+            if 0 < center < w:
+                candidate_widths[center] = max(candidate_widths.get(center, 0), width)
     else:
-        centers = sorted(set(int(c) for c in centers_small))
+        for c, run_w in runs_small:
+            center = int(c)
+            width = int(run_w)
+            if 0 < center < w:
+                candidate_widths[center] = max(candidate_widths.get(center, 0), width)
 
-    centers = [c for c in centers if 0 < c < w]
+    if not candidate_widths:
+        return [], {
+            "split_scale": scale,
+            "split_detect_w": small_w,
+            "candidate_count": 0,
+            "candidate_widths": {},
+            "candidate_costs": {},
+            "dominant_spacing": None,
+            "dominant_spacing_conf": 0.0,
+            "dominant_phase": None,
+            "strong_candidate_count": 0,
+        }
+
+    full_proj = np.count_nonzero(ink_roi, axis=0).astype(np.float32)
+    refined_widths = {}
+    for c, width in candidate_widths.items():
+        refine_r = max(SPLIT_REFINE_RADIUS_MIN, int(round(width * SPLIT_REFINE_RADIUS_RATIO)))
+        left = max(0, c - refine_r)
+        right = min(w, c + refine_r + 1)
+        if right <= left:
+            continue
+        local = full_proj[left:right]
+        best_off = int(np.argmin(local))
+        refined_c = left + best_off
+        refined_cost = float(local[best_off])
+
+        prev_w = refined_widths.get(refined_c, 0)
+        refined_widths[refined_c] = max(prev_w, width)
+        prev_cost = candidate_costs.get(refined_c)
+        if prev_cost is None or refined_cost < prev_cost:
+            candidate_costs[refined_c] = refined_cost
+
+    centers = sorted(refined_widths.keys())
+    if not centers:
+        return [], {
+            "split_scale": scale,
+            "split_detect_w": small_w,
+            "candidate_count": 0,
+            "candidate_widths": {},
+            "candidate_costs": {},
+            "dominant_spacing": None,
+            "dominant_spacing_conf": 0.0,
+            "dominant_phase": None,
+            "strong_candidate_count": 0,
+        }
+
+    keep_n = max(SPLIT_STRONG_VALLEY_MIN, int(round(len(centers) * SPLIT_STRONG_VALLEY_RATIO)))
+    keep_n = min(len(centers), keep_n)
+    strongest = sorted(centers, key=lambda c: candidate_costs.get(c, 1e9))[:keep_n]
+    strong_set = set(strongest)
+
+    spacing, spacing_conf = estimate_dominant_spacing(
+        centers=centers,
+        candidate_widths=refined_widths,
+        candidate_costs=candidate_costs,
+        strong_centers=strongest,
+    )
+    phase = estimate_dominant_phase(
+        centers=strongest,
+        candidate_widths=refined_widths,
+        candidate_costs=candidate_costs,
+        spacing=spacing,
+    )
     return centers, {
         "split_scale": scale,
         "split_detect_w": small_w,
         "candidate_count": len(centers),
+        "candidate_widths": refined_widths,
+        "candidate_costs": candidate_costs,
+        "dominant_spacing": spacing,
+        "dominant_spacing_conf": spacing_conf,
+        "dominant_phase": phase,
+        "strong_candidate_count": len(strong_set),
     }
 
 
-def build_column_boundaries(total_width, max_col_width, split_candidates):
+def estimate_dominant_spacing(centers, candidate_widths, candidate_costs, strong_centers):
+    if len(strong_centers) < 3:
+        return None, 0.0
+
+    centers_np = np.asarray(sorted(strong_centers), dtype=np.float32)
+    diffs = np.diff(centers_np)
+    if diffs.size < 2:
+        return None, 0.0
+
+    strengths = []
+    for c in centers_np:
+        cc = int(c)
+        width = float(candidate_widths.get(cc, 1.0))
+        cost = float(candidate_costs.get(cc, 1.0))
+        strengths.append(width / (1.0 + cost))
+    widths_np = np.asarray(strengths, dtype=np.float32)
+
+    pair_weights = (widths_np[:-1] + widths_np[1:]) * 0.5
+    q1, q3 = np.percentile(diffs, [25, 75])
+    iqr = max(1.0, float(q3 - q1))
+    low = max(float(SPLIT_MIN_SPACING), float(q1 - 1.5 * iqr))
+    high = float(q3 + 1.5 * iqr)
+    mask = (diffs >= low) & (diffs <= high)
+
+    diffs_core = diffs[mask]
+    weights_core = pair_weights[mask]
+    if diffs_core.size < 2:
+        return None, 0.0
+
+    median_step = float(np.median(diffs_core))
+    bin_size = max(8.0, round(median_step * 0.08))
+    bins = np.round(diffs_core / bin_size).astype(np.int32)
+    uniq_bins = np.unique(bins)
+    if uniq_bins.size == 0:
+        return None, 0.0
+
+    best_bin = None
+    best_weight = -1.0
+    total_weight = float(np.sum(weights_core)) + 1e-6
+    for b in uniq_bins:
+        w_sum = float(np.sum(weights_core[bins == b]))
+        if w_sum > best_weight:
+            best_weight = w_sum
+            best_bin = b
+
+    if best_bin is None:
+        return None, 0.0
+
+    chosen = diffs_core[bins == best_bin]
+    spacing = int(round(float(np.median(chosen))))
+    if spacing < SPLIT_MIN_SPACING:
+        return None, 0.0
+
+    confidence = max(0.0, min(1.0, best_weight / total_weight))
+    return spacing, confidence
+
+
+def estimate_dominant_phase(centers, candidate_widths, candidate_costs, spacing):
+    if spacing is None or spacing <= 0 or len(centers) == 0:
+        return None
+
+    residues = []
+    weights = []
+    for c in centers:
+        residue = int(c) % int(spacing)
+        width = float(candidate_widths.get(int(c), 1.0))
+        cost = float(candidate_costs.get(int(c), 1.0))
+        residues.append(residue)
+        weights.append(width / (1.0 + cost))
+
+    residues = np.asarray(residues, dtype=np.float32)
+    weights = np.asarray(weights, dtype=np.float32)
+    if residues.size == 0:
+        return None
+
+    bin_size = max(6, int(round(spacing * 0.08)))
+    bins = np.round(residues / float(bin_size)).astype(np.int32)
+    uniq_bins = np.unique(bins)
+    if uniq_bins.size == 0:
+        return None
+
+    best_bin = None
+    best_weight = -1.0
+    for b in uniq_bins:
+        w_sum = float(np.sum(weights[bins == b]))
+        if w_sum > best_weight:
+            best_weight = w_sum
+            best_bin = b
+
+    chosen = residues[bins == best_bin]
+    if chosen.size == 0:
+        return None
+    return int(round(float(np.median(chosen))))
+
+
+def choose_split_in_window(
+    feasible, end, target_width, candidate_widths, candidate_costs, cost_low, cost_high, spacing, phase
+):
+    if not feasible:
+        return None
+
+    max_score = 1.0
+    if candidate_widths:
+        max_score = max(float(v) for v in candidate_widths.values())
+
+    best = None
+    best_cost = None
+    for c in feasible:
+        seg_w = end - c
+        width_cost = abs(seg_w - target_width)
+
+        phase_cost = 0.0
+        if spacing is not None and phase is not None and spacing > 0:
+            delta = abs((c - phase) % spacing)
+            phase_cost = min(delta, spacing - delta)
+
+        strength = float(candidate_widths.get(c, 1.0)) / max_score
+        raw_cost = float(candidate_costs.get(c, cost_high))
+        denom = max(1.0, cost_high - cost_low)
+        norm_cost = (raw_cost - cost_low) / denom
+        norm_cost = max(0.0, min(2.0, norm_cost))
+
+        cost = width_cost + 0.45 * phase_cost + 34.0 * norm_cost - 20.0 * strength
+
+        if best_cost is None or cost < best_cost:
+            best = c
+            best_cost = cost
+    return best
+
+
+def build_column_boundaries(total_width, max_col_width, split_candidates, split_info=None):
     max_col_width = max(1, min(int(max_col_width), int(total_width)))
     min_col_width = max(80, int(round(max_col_width * 0.60)))
     min_left_width = max(80, int(round(max_col_width * 0.45)))
 
     candidates = sorted(set(c for c in split_candidates if 0 < c < total_width))
+    candidate_widths = {}
+    candidate_costs = {}
+    dominant_spacing = None
+    dominant_spacing_conf = 0.0
+    dominant_phase = None
+    if split_info:
+        candidate_widths = dict(split_info.get("candidate_widths", {}))
+        candidate_costs = dict(split_info.get("candidate_costs", {}))
+        dominant_spacing = split_info.get("dominant_spacing")
+        dominant_spacing_conf = float(split_info.get("dominant_spacing_conf", 0.0))
+        dominant_phase = split_info.get("dominant_phase")
+
+    use_spacing = (
+        dominant_spacing is not None
+        and dominant_spacing > SPLIT_MIN_SPACING
+        and dominant_spacing_conf >= 0.18
+    )
+    phase = None
+    target_width = max_col_width
+    if use_spacing and candidates:
+        phase = dominant_phase
+        if phase is None:
+            phase = candidates[-1] % dominant_spacing
+        lines_per_col = max(1, int(round(max_col_width / float(dominant_spacing))))
+        target_width = int(round(lines_per_col * dominant_spacing))
+        if target_width > max_col_width and lines_per_col > 1:
+            lines_per_col -= 1
+            target_width = int(round(lines_per_col * dominant_spacing))
+        if target_width < min_col_width and (lines_per_col + 1) * dominant_spacing <= max_col_width:
+            lines_per_col += 1
+            target_width = int(round(lines_per_col * dominant_spacing))
+        target_width = max(min_col_width, min(max_col_width, target_width))
+
     # 按“从右到左”切分：优先确定右侧整列，余量留在最左侧
     boundaries_desc = [total_width]
     end = total_width
+    if candidate_costs:
+        arr_cost = np.array(list(candidate_costs.values()), dtype=np.float32)
+        cost_low = float(np.percentile(arr_cost, 15))
+        cost_high = float(np.percentile(arr_cost, 85))
+        if cost_high <= cost_low:
+            cost_high = cost_low + 1.0
+    else:
+        cost_low, cost_high = 0.0, 1.0
 
     while end > max_col_width:
         low = end - max_col_width
         high = end - min_col_width
         feasible = [c for c in candidates if low <= c <= high]
+        feasible_valid = [
+            c for c in feasible
+            if (c >= min_left_width or c <= max_col_width)
+        ]
+        if feasible_valid:
+            feasible = feasible_valid
 
         if feasible:
-            split = None
-            # 选更靠左的切点，得到更宽的当前右侧列
-            for c in feasible:
-                remaining = c
-                if remaining >= min_left_width or remaining <= max_col_width:
-                    split = c
-                    break
+            split = choose_split_in_window(
+                feasible=feasible,
+                end=end,
+                target_width=target_width,
+                candidate_widths=candidate_widths,
+                candidate_costs=candidate_costs,
+                cost_low=cost_low,
+                cost_high=cost_high,
+                spacing=dominant_spacing if use_spacing else None,
+                phase=phase,
+            )
             if split is None:
                 split = feasible[0]
         else:
@@ -483,7 +750,12 @@ def main():
         ink_mask, _ = get_ink_mask(binary)
         roi_ink = ink_mask[y:y + h, x:x + w]
         split_candidates, split_info = detect_split_candidates(roi_ink)
-        boundaries = build_column_boundaries(w, max_col_width, split_candidates)
+        boundaries = build_column_boundaries(
+            total_width=w,
+            max_col_width=max_col_width,
+            split_candidates=split_candidates,
+            split_info=split_info,
+        )
         col_widths = [boundaries[i + 1] - boundaries[i] for i in range(len(boundaries) - 1)]
 
         for b in boundaries[1:-1]:
@@ -516,6 +788,17 @@ def main():
             f"  分页: max_col_width={max_col_width}, split_candidates={split_info.get('candidate_count', 0)}, "
             f"列数={max(0, len(boundaries)-1)}, PDF页数={pages}, 顺序=右到左"
         )
+        if split_info.get("dominant_spacing") is not None:
+            print(
+                "  行距估计: "
+                f"spacing={split_info.get('dominant_spacing')}, "
+                f"conf={split_info.get('dominant_spacing_conf', 0.0):.2f}"
+            )
+            print(
+                "  强谷值: "
+                f"count={split_info.get('strong_candidate_count', 0)}/"
+                f"{split_info.get('candidate_count', 0)}"
+            )
         if col_widths:
             print(f"  列宽: 最右={col_widths[-1]}, 最左={col_widths[0]}")
 

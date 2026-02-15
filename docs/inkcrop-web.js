@@ -4,6 +4,11 @@ const WEB_DEFAULTS = {
   borderBandMin: 24,
   bboxProjRatio: 0.002,
   splitPercentile: 24,
+  splitMinSpacing: 80,
+  splitStrongValleyRatio: 0.45,
+  splitStrongValleyMin: 12,
+  splitRefineRadiusRatio: 0.4,
+  splitRefineRadiusMin: 3,
   a4Ratio: 297.0 / 210.0,
 };
 
@@ -296,6 +301,125 @@ function percentile(values, pct) {
   const arr = Array.from(values).sort((a, b) => a - b);
   const idx = clamp(Math.round((pct / 100) * (arr.length - 1)), 0, arr.length - 1);
   return arr[idx];
+}
+
+function estimateDominantSpacing(centers, candidateWidths, candidateCosts, strongCenters) {
+  if (!strongCenters || strongCenters.length < 3) {
+    return { spacing: null, confidence: 0 };
+  }
+
+  const sortedStrong = Array.from(strongCenters).sort((a, b) => a - b);
+  const diffs = [];
+  const pairWeights = [];
+  for (let i = 0; i < sortedStrong.length - 1; i += 1) {
+    diffs.push(sortedStrong[i + 1] - sortedStrong[i]);
+    const c0 = sortedStrong[i];
+    const c1 = sortedStrong[i + 1];
+    const w0 = candidateWidths && candidateWidths[c0] ? candidateWidths[c0] : 1;
+    const w1 = candidateWidths && candidateWidths[c1] ? candidateWidths[c1] : 1;
+    const k0 = candidateCosts && candidateCosts[c0] !== undefined ? candidateCosts[c0] : 1;
+    const k1 = candidateCosts && candidateCosts[c1] !== undefined ? candidateCosts[c1] : 1;
+    const s0 = w0 / (1 + k0);
+    const s1 = w1 / (1 + k1);
+    const pairWeight = (s0 + s1) * 0.5;
+    pairWeights.push(pairWeight);
+  }
+  if (diffs.length < 2) {
+    return { spacing: null, confidence: 0 };
+  }
+
+  const q1 = percentile(diffs, 25);
+  const q3 = percentile(diffs, 75);
+  const iqr = Math.max(1, q3 - q1);
+  const low = Math.max(WEB_DEFAULTS.splitMinSpacing, q1 - 1.5 * iqr);
+  const high = q3 + 1.5 * iqr;
+
+  const coreDiffs = [];
+  const coreWeights = [];
+  for (let i = 0; i < diffs.length; i += 1) {
+    if (diffs[i] >= low && diffs[i] <= high) {
+      coreDiffs.push(diffs[i]);
+      coreWeights.push(pairWeights[i]);
+    }
+  }
+  if (coreDiffs.length < 2) {
+    return { spacing: null, confidence: 0 };
+  }
+
+  const medianStep = percentile(coreDiffs, 50);
+  const binSize = Math.max(8, Math.round(medianStep * 0.08));
+  const bins = new Map();
+  let totalWeight = 0;
+  for (let i = 0; i < coreDiffs.length; i += 1) {
+    const b = Math.round(coreDiffs[i] / binSize);
+    const prev = bins.get(b) || { weight: 0, values: [] };
+    prev.weight += coreWeights[i];
+    prev.values.push(coreDiffs[i]);
+    bins.set(b, prev);
+    totalWeight += coreWeights[i];
+  }
+
+  let bestBin = null;
+  let bestWeight = -1;
+  for (const [binId, payload] of bins.entries()) {
+    if (payload.weight > bestWeight) {
+      bestWeight = payload.weight;
+      bestBin = binId;
+    }
+  }
+  if (bestBin === null) {
+    return { spacing: null, confidence: 0 };
+  }
+
+  const chosen = bins.get(bestBin).values;
+  const spacing = Math.round(percentile(chosen, 50));
+  if (spacing < WEB_DEFAULTS.splitMinSpacing) {
+    return { spacing: null, confidence: 0 };
+  }
+  const confidence = Math.min(1, Math.max(0, bestWeight / (totalWeight + 1e-6)));
+  return { spacing, confidence };
+}
+
+function estimateDominantPhase(centers, candidateWidths, candidateCosts, spacing) {
+  if (!spacing || spacing <= 0 || !centers || centers.length === 0) {
+    return null;
+  }
+  const residues = [];
+  const weights = [];
+  for (const c of centers) {
+    const residue = c % spacing;
+    const width = candidateWidths && candidateWidths[c] ? candidateWidths[c] : 1;
+    const cost = candidateCosts && candidateCosts[c] !== undefined ? candidateCosts[c] : 1;
+    residues.push(residue);
+    weights.push(width / (1 + cost));
+  }
+  if (residues.length === 0) {
+    return null;
+  }
+
+  const binSize = Math.max(6, Math.round(spacing * 0.08));
+  const bins = new Map();
+  for (let i = 0; i < residues.length; i += 1) {
+    const b = Math.round(residues[i] / binSize);
+    const prev = bins.get(b) || { weight: 0, residues: [] };
+    prev.weight += weights[i];
+    prev.residues.push(residues[i]);
+    bins.set(b, prev);
+  }
+
+  let bestBin = null;
+  let bestWeight = -1;
+  for (const [binId, payload] of bins.entries()) {
+    if (payload.weight > bestWeight) {
+      bestWeight = payload.weight;
+      bestBin = binId;
+    }
+  }
+  if (bestBin === null) {
+    return null;
+  }
+  const chosen = bins.get(bestBin).residues;
+  return Math.round(percentile(chosen, 50));
 }
 
 function removeBorderConnectedInk(binaryMat) {
@@ -605,33 +729,127 @@ function detectSplitCandidates(inkRoiMat, detectMaxSide) {
 
   const closed = Uint8Array.from(valleyMat.data);
   valleyMat.delete();
-  const centersSmall = [];
+  const runsSmall = [];
   let start = -1;
   for (let i = 0; i < closed.length; i += 1) {
     const flag = closed[i] > 0;
     if (flag && start < 0) {
       start = i;
     } else if (!flag && start >= 0) {
-      centersSmall.push(Math.floor((start + i - 1) / 2));
+      const end = i - 1;
+      runsSmall.push([Math.floor((start + end) / 2), end - start + 1]);
       start = -1;
     }
   }
   if (start >= 0) {
-    centersSmall.push(Math.floor((start + closed.length - 1) / 2));
+    const end = closed.length - 1;
+    runsSmall.push([Math.floor((start + end) / 2), end - start + 1]);
   }
 
   const edgeMargin = Math.max(2, Math.round(smallW * 0.01));
-  const filtered = centersSmall.filter(
-    (c) => c > edgeMargin && c < smallW - edgeMargin
+  const filtered = runsSmall.filter(
+    ([c]) => c > edgeMargin && c < smallW - edgeMargin
   );
 
-  let centers;
+  const candidateWidthsRaw = {};
   if (scale !== 1.0) {
-    centers = Array.from(new Set(filtered.map((c) => Math.round(c / scale)))).sort((a, b) => a - b);
+    for (const [c, runW] of filtered) {
+      const center = Math.round(c / scale);
+      const width = Math.max(1, Math.round(runW / scale));
+      if (center > 0 && center < w) {
+        candidateWidthsRaw[center] = Math.max(candidateWidthsRaw[center] || 0, width);
+      }
+    }
   } else {
-    centers = Array.from(new Set(filtered)).sort((a, b) => a - b);
+    for (const [c, runW] of filtered) {
+      const center = Math.round(c);
+      if (center > 0 && center < w) {
+        candidateWidthsRaw[center] = Math.max(candidateWidthsRaw[center] || 0, runW);
+      }
+    }
   }
-  centers = centers.filter((c) => c > 0 && c < w);
+
+  if (Object.keys(candidateWidthsRaw).length === 0) {
+    if (ownSmall) {
+      roiSmall.delete();
+    }
+    return {
+      centers: [],
+      info: {
+        splitScale: scale,
+        splitDetectW: smallW,
+        candidateCount: 0,
+        candidateWidths: {},
+        candidateCosts: {},
+        dominantSpacing: null,
+        dominantSpacingConf: 0,
+        dominantPhase: null,
+        strongCandidateCount: 0,
+      },
+    };
+  }
+
+  const fullSums = new cv.Mat();
+  cv.reduce(inkRoiMat, fullSums, 0, cv.REDUCE_SUM, cv.CV_32S);
+  const fullProj = new Float32Array(w);
+  for (let c = 0; c < w; c += 1) {
+    fullProj[c] = fullSums.intPtr(0, c)[0] / 255.0;
+  }
+  fullSums.delete();
+
+  const candidateWidths = {};
+  const candidateCosts = {};
+  for (const [centerStr, widthRaw] of Object.entries(candidateWidthsRaw)) {
+    const center = Number(centerStr);
+    const width = Number(widthRaw);
+    const refineR = Math.max(
+      WEB_DEFAULTS.splitRefineRadiusMin,
+      Math.round(width * WEB_DEFAULTS.splitRefineRadiusRatio)
+    );
+    const left = Math.max(0, center - refineR);
+    const right = Math.min(w, center + refineR + 1);
+    if (right <= left) {
+      continue;
+    }
+    let bestIdx = left;
+    let bestVal = fullProj[left];
+    for (let i = left + 1; i < right; i += 1) {
+      if (fullProj[i] < bestVal) {
+        bestVal = fullProj[i];
+        bestIdx = i;
+      }
+    }
+    candidateWidths[bestIdx] = Math.max(candidateWidths[bestIdx] || 0, width);
+    if (candidateCosts[bestIdx] === undefined || bestVal < candidateCosts[bestIdx]) {
+      candidateCosts[bestIdx] = bestVal;
+    }
+  }
+
+  const centers = Object.keys(candidateWidths)
+    .map((k) => Number(k))
+    .sort((a, b) => a - b);
+  const keepN = Math.min(
+    centers.length,
+    Math.max(WEB_DEFAULTS.splitStrongValleyMin, Math.round(centers.length * WEB_DEFAULTS.splitStrongValleyRatio))
+  );
+  const strongCenters = centers
+    .slice()
+    .sort((a, b) => (candidateCosts[a] || 1e9) - (candidateCosts[b] || 1e9))
+    .slice(0, keepN)
+    .sort((a, b) => a - b);
+
+  const spacingRes = estimateDominantSpacing(
+    centers,
+    candidateWidths,
+    candidateCosts,
+    strongCenters
+  );
+  const dominantPhase = estimateDominantPhase(
+    strongCenters,
+    candidateWidths,
+    candidateCosts,
+    spacingRes.spacing
+  );
 
   if (ownSmall) {
     roiSmall.delete();
@@ -639,11 +857,68 @@ function detectSplitCandidates(inkRoiMat, detectMaxSide) {
 
   return {
     centers,
-    info: { splitScale: scale, splitDetectW: smallW, candidateCount: centers.length },
+    info: {
+      splitScale: scale,
+      splitDetectW: smallW,
+      candidateCount: centers.length,
+      candidateWidths,
+      candidateCosts,
+      dominantSpacing: spacingRes.spacing,
+      dominantSpacingConf: spacingRes.confidence,
+      dominantPhase,
+      strongCandidateCount: strongCenters.length,
+    },
   };
 }
 
-function buildColumnBoundaries(totalWidth, maxColWidth, splitCandidates) {
+function chooseSplitInWindow(
+  feasible,
+  end,
+  targetWidth,
+  candidateWidths,
+  candidateCosts,
+  costLow,
+  costHigh,
+  spacing,
+  phase
+) {
+  if (!feasible || feasible.length === 0) {
+    return null;
+  }
+  const widthValues = Object.values(candidateWidths || {});
+  let maxScore = 1;
+  if (widthValues.length > 0) {
+    maxScore = Math.max(...widthValues);
+  }
+
+  let best = null;
+  let bestCost = null;
+  for (const c of feasible) {
+    const segW = end - c;
+    const widthCost = Math.abs(segW - targetWidth);
+
+    let phaseCost = 0;
+    if (spacing && phase !== null && spacing > 0) {
+      const delta = Math.abs((c - phase) % spacing);
+      phaseCost = Math.min(delta, spacing - delta);
+    }
+
+    const strength = (candidateWidths && candidateWidths[c] ? candidateWidths[c] : 1) / maxScore;
+    const rawCost =
+      candidateCosts && candidateCosts[c] !== undefined ? candidateCosts[c] : costHigh;
+    const denom = Math.max(1, costHigh - costLow);
+    let normCost = (rawCost - costLow) / denom;
+    normCost = clamp(normCost, 0, 2);
+    const cost = widthCost + 0.45 * phaseCost + 34.0 * normCost - 20.0 * strength;
+    if (bestCost === null || cost < bestCost) {
+      best = c;
+      bestCost = cost;
+    }
+  }
+  return best;
+}
+
+function buildColumnBoundaries(totalWidth, maxColWidth, splitCandidates, splitInfo) {
   const width = Math.max(1, Math.min(Math.floor(maxColWidth), Math.floor(totalWidth)));
   const minColWidth = Math.max(80, Math.round(width * 0.6));
   const minLeftWidth = Math.max(80, Math.round(width * 0.45));
@@ -651,22 +926,74 @@ function buildColumnBoundaries(totalWidth, maxColWidth, splitCandidates) {
     new Set(splitCandidates.filter((c) => c > 0 && c < totalWidth))
   ).sort((a, b) => a - b);
 
+  const candidateWidths = (splitInfo && splitInfo.candidateWidths) || {};
+  const candidateCosts = (splitInfo && splitInfo.candidateCosts) || {};
+  const dominantSpacing = splitInfo && splitInfo.dominantSpacing ? splitInfo.dominantSpacing : null;
+  const dominantSpacingConf =
+    splitInfo && splitInfo.dominantSpacingConf ? splitInfo.dominantSpacingConf : 0;
+  const dominantPhase =
+    splitInfo && splitInfo.dominantPhase !== undefined ? splitInfo.dominantPhase : null;
+  const useSpacing =
+    Boolean(dominantSpacing) &&
+    dominantSpacing > WEB_DEFAULTS.splitMinSpacing &&
+    dominantSpacingConf >= 0.18;
+
+  let phase = null;
+  let targetWidth = width;
+  if (useSpacing && candidates.length > 0) {
+    phase = dominantPhase;
+    if (phase === null || phase === undefined) {
+      phase = candidates[candidates.length - 1] % dominantSpacing;
+    }
+    let linesPerCol = Math.max(1, Math.round(width / dominantSpacing));
+    targetWidth = Math.round(linesPerCol * dominantSpacing);
+    if (targetWidth > width && linesPerCol > 1) {
+      linesPerCol -= 1;
+      targetWidth = Math.round(linesPerCol * dominantSpacing);
+    }
+    if (targetWidth < minColWidth && (linesPerCol + 1) * dominantSpacing <= width) {
+      linesPerCol += 1;
+      targetWidth = Math.round(linesPerCol * dominantSpacing);
+    }
+    targetWidth = clamp(targetWidth, minColWidth, width);
+  }
+
   const boundariesDesc = [totalWidth];
   let end = totalWidth;
+  let costLow = 0;
+  let costHigh = 1;
+  const costValues = Object.values(candidateCosts);
+  if (costValues.length > 0) {
+    costLow = percentile(costValues, 15);
+    costHigh = percentile(costValues, 85);
+    if (costHigh <= costLow) {
+      costHigh = costLow + 1;
+    }
+  }
   while (end > width) {
     const low = end - width;
     const high = end - minColWidth;
-    const feasible = candidates.filter((c) => c >= low && c <= high);
+    let feasible = candidates.filter((c) => c >= low && c <= high);
+    const feasibleValid = feasible.filter((c) => c >= minLeftWidth || c <= width);
+    if (feasibleValid.length > 0) {
+      feasible = feasibleValid;
+    }
 
     let split;
     if (feasible.length > 0) {
-      split = feasible[0];
-      for (const c of feasible) {
-        const remaining = c;
-        if (remaining >= minLeftWidth || remaining <= width) {
-          split = c;
-          break;
-        }
+      split = chooseSplitInWindow(
+        feasible,
+        end,
+        targetWidth,
+        candidateWidths,
+        candidateCosts,
+        costLow,
+        costHigh,
+        useSpacing ? dominantSpacing : null,
+        phase
+      );
+      if (split === null) {
+        split = feasible[0];
       }
     } else {
       split = low;
@@ -801,7 +1128,12 @@ async function runProcessing() {
       roi = inkMask.roi(new cv.Rect(bbox.x, bbox.y, bbox.w, bbox.h));
       const splitRes = detectSplitCandidates(roi, options.detectMaxSide);
       splitInfo = splitRes.info;
-      boundaries = buildColumnBoundaries(bbox.w, maxColWidth, splitRes.centers);
+      boundaries = buildColumnBoundaries(
+        bbox.w,
+        maxColWidth,
+        splitRes.centers,
+        splitInfo
+      );
       pages = Math.max(0, boundaries.length - 1);
     }
 
@@ -837,6 +1169,16 @@ async function runProcessing() {
         `bbox: x=${bbox.x}, y=${bbox.y}, w=${bbox.w}, h=${bbox.h}, ` +
           `split_candidates=${splitInfo.candidateCount}, pages=${pages}`
       );
+      if (splitInfo.dominantSpacing) {
+        appendLog(
+          `line_spacing: spacing=${splitInfo.dominantSpacing}, conf=${splitInfo.dominantSpacingConf.toFixed(
+            2
+          )}`
+        );
+        appendLog(
+          `strong_valleys: ${splitInfo.strongCandidateCount || 0}/${splitInfo.candidateCount || 0}`
+        );
+      }
     } else {
       appendLog("未检测到有效墨迹框");
     }
