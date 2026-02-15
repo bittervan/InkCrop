@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import queue
+import shutil
 import subprocess
 import sys
 import threading
+import os
+from datetime import datetime
 from pathlib import Path
 from tkinter import END, LEFT, RIGHT, TOP, BOTH, X, Y, filedialog, messagebox, ttk
 import tkinter as tk
@@ -25,7 +28,9 @@ class InkCropGUI:
         self.box_preview_img = None
 
         self.input_var = tk.StringVar()
-        self.output_dir_var = tk.StringVar(value=str(self.script_dir / "outputs"))
+        self.cache_dir = self._resolve_cache_dir()
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir_var = tk.StringVar(value=str(self.cache_dir))
 
         self._build_ui()
         self.root.after(100, self._poll_queue)
@@ -40,12 +45,9 @@ class InkCropGUI:
         )
         ttk.Button(frm_top, text="选择图片", command=self._choose_input).grid(row=0, column=2)
 
-        ttk.Label(frm_top, text="输出目录:").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(frm_top, textvariable=self.output_dir_var, width=90).grid(
+        ttk.Label(frm_top, text="缓存目录:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(frm_top, textvariable=self.cache_dir_var, width=90, state="readonly").grid(
             row=1, column=1, sticky="we", padx=8, pady=(8, 0)
-        )
-        ttk.Button(frm_top, text="选择目录", command=self._choose_output_dir).grid(
-            row=1, column=2, pady=(8, 0)
         )
 
         frm_top.columnconfigure(1, weight=1)
@@ -94,10 +96,9 @@ class InkCropGUI:
         if path:
             self.input_var.set(path)
 
-    def _choose_output_dir(self):
-        path = filedialog.askdirectory(title="选择输出目录")
-        if path:
-            self.output_dir_var.set(path)
+    def _resolve_cache_dir(self) -> Path:
+        xdg_cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        return xdg_cache_home / "inkcrop"
 
     def _clear_log(self):
         self.log_text.delete("1.0", END)
@@ -117,7 +118,8 @@ class InkCropGUI:
             messagebox.showerror("错误", "输入图片不存在，请重新选择。")
             return
 
-        output_dir = Path(self.output_dir_var.get().strip() or (self.script_dir / "outputs"))
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        output_dir = self.cache_dir / f"{input_path.stem}_{run_id}"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         suffix = input_path.suffix if input_path.suffix else ".jpg"
@@ -138,14 +140,24 @@ class InkCropGUI:
         self.running = True
         self.run_btn.state(["disabled"])
         self.status_var.set("处理中...")
+        self._append_log(f"缓存目录: {output_dir}")
         self._append_log(f"$ {' '.join(cmd)}")
 
         thread = threading.Thread(
-            target=self._worker_run, args=(cmd, binary_out, box_out, pdf_out), daemon=True
+            target=self._worker_run,
+            args=(cmd, binary_out, box_out, pdf_out, output_dir),
+            daemon=True,
         )
         thread.start()
 
-    def _worker_run(self, cmd, binary_out: Path, box_out: Path, pdf_out: Path):
+    def _worker_run(
+        self,
+        cmd,
+        binary_out: Path,
+        box_out: Path,
+        pdf_out: Path,
+        cache_dir: Path,
+    ):
         try:
             process = subprocess.Popen(
                 cmd,
@@ -166,11 +178,37 @@ class InkCropGUI:
                         "binary_out": binary_out,
                         "box_out": box_out,
                         "pdf_out": pdf_out,
+                        "cache_dir": cache_dir,
                     },
                 )
             )
         except Exception as exc:
             self.worker_queue.put(("error", str(exc)))
+
+    def _export_outputs(self, result: dict):
+        target_dir = filedialog.askdirectory(title="处理完成：选择结果保存目录")
+        if not target_dir:
+            self._append_log(f"未选择保存目录，结果保留在缓存: {result['cache_dir']}")
+            return
+
+        try:
+            save_dir = Path(target_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            output_files = [result["binary_out"], result["box_out"], result["pdf_out"]]
+            exported_files = []
+            for src_path in output_files:
+                dst_path = save_dir / src_path.name
+                shutil.copy2(src_path, dst_path)
+                exported_files.append(dst_path)
+
+            self._append_log(
+                "✓ 已导出：\n- " + "\n- ".join(str(path) for path in exported_files)
+            )
+            messagebox.showinfo("导出完成", f"已保存到:\n{save_dir}")
+        except Exception as exc:
+            self._append_log(f"✗ 导出失败: {exc}")
+            messagebox.showerror("导出失败", str(exc))
 
     def _load_preview(self, img_path: Path, target_label: ttk.Label, kind: str):
         if not img_path.exists():
@@ -211,6 +249,7 @@ class InkCropGUI:
                     self._append_log(
                         f"✓ 完成：\n- {result['binary_out']}\n- {result['box_out']}\n- {result['pdf_out']}\n"
                     )
+                    self._export_outputs(result)
                 else:
                     self.status_var.set("失败")
                     self._append_log(f"✗ 处理失败，退出码: {result['returncode']}")
