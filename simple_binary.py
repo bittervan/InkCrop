@@ -7,13 +7,12 @@
 2) 加框预览图（在原图上画出墨迹范围框）
 """
 import sys
+import tempfile
 from pathlib import Path
 
 import cv2
 import numpy as np
-from PIL import Image
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from skimage.segmentation import clear_border
 
@@ -30,6 +29,7 @@ A4_WIDTH = 210.0
 A4_HEIGHT = 297.0
 A4_RATIO = A4_HEIGHT / A4_WIDTH
 PDF_PAGE_MARGIN_PT = 24
+PDF_IMAGE_JPEG_QUALITY = 90
 
 
 def get_ink_mask(binary):
@@ -333,30 +333,43 @@ def save_columns_to_a4_pdf(image, bbox, boundaries, pdf_output_path):
     c = canvas.Canvas(str(pdf_output_path), pagesize=A4)
     page_count = 0
 
-    # 固定按右到左分页输出
-    for i in range(len(boundaries) - 2, -1, -1):
-        left = boundaries[i]
-        right = boundaries[i + 1]
-        if right <= left:
-            continue
+    # 先写临时 JPEG 再嵌入 PDF，可显著减少 ReportLab 的编码开销
+    with tempfile.TemporaryDirectory(prefix="inkcrop_pdf_") as temp_dir:
+        temp_dir_path = Path(temp_dir)
 
-        seg = image[y:y + h, x + left:x + right]
-        if seg.size == 0:
-            continue
+        # 固定按右到左分页输出
+        for i in range(len(boundaries) - 2, -1, -1):
+            left = boundaries[i]
+            right = boundaries[i + 1]
+            if right <= left:
+                continue
 
-        seg_rgb = cv2.cvtColor(seg, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(seg_rgb)
-        img_w, img_h = pil_img.size
+            seg = image[y:y + h, x + left:x + right]
+            if seg.size == 0:
+                continue
 
-        scale = min(usable_w / img_w, usable_h / img_h)
-        draw_w = img_w * scale
-        draw_h = img_h * scale
-        draw_x = (page_w - draw_w) / 2.0
-        draw_y = (page_h - draw_h) / 2.0
+            img_h, img_w = seg.shape[:2]
+            if img_w <= 0 or img_h <= 0:
+                continue
 
-        c.drawImage(ImageReader(pil_img), draw_x, draw_y, draw_w, draw_h)
-        c.showPage()
-        page_count += 1
+            temp_img_path = temp_dir_path / f"page_{page_count:04d}.jpg"
+            ok = cv2.imwrite(
+                str(temp_img_path),
+                seg,
+                [cv2.IMWRITE_JPEG_QUALITY, PDF_IMAGE_JPEG_QUALITY]
+            )
+            if not ok:
+                continue
+
+            scale = min(usable_w / img_w, usable_h / img_h)
+            draw_w = img_w * scale
+            draw_h = img_h * scale
+            draw_x = (page_w - draw_w) / 2.0
+            draw_y = (page_h - draw_h) / 2.0
+
+            c.drawImage(str(temp_img_path), draw_x, draw_y, draw_w, draw_h)
+            c.showPage()
+            page_count += 1
 
     c.save()
     return page_count
@@ -413,8 +426,8 @@ def main():
         cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
 
-    white_area = int(np.sum(binary_inv == 255))
-    black_area = int(np.sum(binary_inv == 0))
+    white_area = int(cv2.countNonZero(binary_inv))
+    black_area = int(binary_inv.size - white_area)
 
     print(f"白色像素数: {white_area} ({white_area/(binary_inv.shape[0]*binary_inv.shape[1])*100:.2f}%)")
     print(f"黑色像素数: {black_area} ({black_area/(binary_inv.shape[0]*binary_inv.shape[1])*100:.2f}%)")
