@@ -38,6 +38,9 @@ jobs:
           python -m pip install -r packaging/requirements-build.txt
 
       - name: Build standalone package
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
         run: python packaging/build.py --onefile
 
       - name: Upload build artifact

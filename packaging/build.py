@@ -132,13 +132,13 @@ def main() -> int:
     build_pyinstaller(onefile=onefile)
     artifact = resolve_dist_artifact(onefile=onefile)
     if not artifact.exists():
-        print(f"错误：未找到构建产物 {artifact}")
+        print(f"ERROR: build artifact not found: {artifact}")
         return 1
 
     archive_path = archive_artifact(artifact)
-    print(f"\n✓ 构建完成: {artifact}")
-    print(f"✓ 分发包: {archive_path}")
-    print("提示：请在目标系统上测试双击启动是否正常。")
+    print(f"\nBuild complete: {artifact}")
+    print(f"Release package: {archive_path}")
+    print("Tip: test launch on target OS before publishing.")
     return 0
 
 
