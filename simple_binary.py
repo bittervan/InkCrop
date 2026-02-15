@@ -20,6 +20,7 @@ BORDER_BAND_MIN = 24
 
 BBOX_DETECT_MAX_SIDE = 2400
 BBOX_PADDING = 12
+BBOX_EXTRA_PADDING = 8
 BBOX_SCALE_SAFETY = 2.0
 BBOX_PROJ_RATIO = 0.002
 
@@ -172,7 +173,7 @@ def detect_bbox(binary):
         left, top, right, bottom = left_s, top_s, right_s, bottom_s
 
     scale_pad = int(np.ceil(BBOX_SCALE_SAFETY / scale)) if scale < 1.0 else 0
-    total_pad = BBOX_PADDING + scale_pad
+    total_pad = BBOX_PADDING + BBOX_EXTRA_PADDING + scale_pad
 
     left = max(0, left - total_pad)
     top = max(0, top - total_pad)
