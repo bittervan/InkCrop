@@ -1,39 +1,43 @@
 #!/bin/bash
-# 批量二值化 tests 目录中的图片
-# 输出到 outputs 目录
+# 批量二值化并输出加框预览图
+# 输入: tests/*.jpg
+# 输出: outputs/*_binary.jpg, outputs/*_crop_box.jpg
 
-# 切换到脚本所在目录（项目根目录）
 cd "$(dirname "$0")"
 
 echo "=========================================="
-echo "批量二值化 tests 目录中的图片"
-echo "输出到 outputs 目录"
+echo "批量二值化 + 加框预览"
+echo "输入: tests 目录"
+echo "输出: outputs 目录"
 echo "=========================================="
 echo ""
 
-# 获取脚本所在目录的绝对路径
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-
-# 计算jpg文件数量
 tests_dir="$script_dir/tests"
+outputs_dir="$script_dir/outputs"
+mkdir -p "$outputs_dir"
+
 total=$(find "$tests_dir" -maxdepth 1 -name "*.jpg" 2>/dev/null | wc -l)
 
 echo "找到 $total 张图片"
 echo ""
 
-# 计数器
 count=0
-
-# 依次处理每张图片
 for img in "$tests_dir"/*.jpg; do
     if [ -f "$img" ]; then
         count=$((count + 1))
-        filename=$(basename "$img")
+        filename="$(basename "$img")"
+        stem="${filename%.*}"
+        ext=".${filename##*.}"
+
+        binary_out="$outputs_dir/${stem}_binary${ext}"
+        box_out="$outputs_dir/${stem}_crop_box${ext}"
 
         echo "[$count/$total] 处理: $filename"
+        echo "  - 二值图: $(basename "$binary_out")"
+        echo "  - 框预览: $(basename "$box_out")"
 
-        # 调用 simple_binary.py 处理（它会自动输出到 outputs/ 目录）
-        python "$script_dir/simple_binary.py" "$img"
+        python "$script_dir/simple_binary.py" "$img" "$binary_out" "$box_out"
 
         if [ $? -eq 0 ]; then
             echo "  ✓ 完成"
@@ -47,5 +51,6 @@ done
 echo "=========================================="
 echo "✓ 批量处理完成！"
 echo "共处理了 $count 张图片"
-echo "二值化图片保存在 outputs/ 目录，文件名格式：原文件名_binary.jpg"
+echo "二值图: outputs/*_binary.jpg"
+echo "框预览: outputs/*_crop_box.jpg"
 echo "=========================================="
