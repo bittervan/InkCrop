@@ -16,13 +16,13 @@ BUILD_DIR = ROOT_DIR / "build"
 RELEASE_DIR = ROOT_DIR / "release"
 APP_NAME = "InkCrop"
 
-COLLECT_ALL_PACKAGES = [
-    "PySide6",
-    "cv2",
-    "numpy",
-    "PIL",
-    "reportlab",
-    "skimage",
+EXCLUDE_MODULES = [
+    "tkinter",
+    "pytest",
+    "matplotlib",
+    "PySide6.scripts",
+    "numpy.tests",
+    "numpy.testing.tests",
 ]
 
 
@@ -49,8 +49,11 @@ def build_pyinstaller(onefile: bool) -> None:
     else:
         cmd.append("--onedir")
 
-    for package_name in COLLECT_ALL_PACKAGES:
-        cmd.extend(["--collect-all", package_name])
+    if platform.system() != "Windows":
+        cmd.append("--strip")
+
+    for module_name in EXCLUDE_MODULES:
+        cmd.extend(["--exclude-module", module_name])
 
     cmd.append("inkcrop_gui.py")
     run_command(cmd)

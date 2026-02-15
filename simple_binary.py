@@ -14,7 +14,6 @@ import cv2
 import numpy as np
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from skimage.segmentation import clear_border
 
 
 BORDER_CLEAN_MAX_SIDE = 2400
@@ -79,6 +78,29 @@ def get_ink_mask(binary):
     return (binary == 0), "black"
 
 
+def find_border_connected(mask):
+    mask_u8 = mask.astype(np.uint8)
+    num_labels, labels = cv2.connectedComponents(mask_u8, connectivity=8)
+    if num_labels <= 1:
+        return np.zeros_like(mask, dtype=bool)
+
+    h, w = labels.shape
+    border_labels = np.unique(
+        np.concatenate(
+            (
+                labels[0, :],
+                labels[h - 1, :],
+                labels[:, 0],
+                labels[:, w - 1],
+            )
+        )
+    )
+    border_labels = border_labels[border_labels != 0]
+    if border_labels.size == 0:
+        return np.zeros_like(mask, dtype=bool)
+    return np.isin(labels, border_labels)
+
+
 def remove_border_connected_ink(binary):
     ink_mask, ink_color = get_ink_mask(binary)
     h, w = ink_mask.shape
@@ -98,8 +120,7 @@ def remove_border_connected_ink(binary):
         small_h, small_w = h, w
         ink_small = ink_mask
 
-    inside_small = clear_border(ink_small, buffer_size=0)
-    border_connected_small = ink_small & (~inside_small)
+    border_connected_small = find_border_connected(ink_small)
 
     border_band_small = max(
         BORDER_BAND_MIN,
@@ -804,10 +825,10 @@ def main():
         print(f"错误：无法保存加框预览图: {box_output_path}")
         sys.exit(1)
 
-    print(f"\n✓ 已保存二值化图到: {binary_output_path}")
-    print(f"✓ 已保存加框预览图到: {box_output_path}")
+    print(f"\n[OK] 已保存二值化图到: {binary_output_path}")
+    print(f"[OK] 已保存加框预览图到: {box_output_path}")
     if bbox is not None:
-        print(f"✓ 已保存A4分页PDF到: {pdf_output_path}")
+        print(f"[OK] 已保存A4分页PDF到: {pdf_output_path}")
     print(f"  输入图片: {input_path}")
     print(f"  图片大小: {image.shape}")
     print(f"  二值图大小: {binary.shape}")
