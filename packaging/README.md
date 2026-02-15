@@ -63,3 +63,17 @@ python packaging/build.py --onedir
   - 当前 runner 标签：`macos-15-intel`（Intel）和 `macos-15`（Apple Silicon）
 - 自动发布 Release：
   - 推送标签（例如 `v1.0.0`）后会构建全部平台并把 `zip` 附件发布到 GitHub Release
+
+## 7) GitHub Actions 自动发布到 Gitee（仅 Token）
+
+工作流已支持：当 push `v*` 标签后，会在构建完成后自动把附件上传到 Gitee Release。
+
+需要在 GitHub 仓库 `Settings -> Secrets and variables -> Actions` 配置：
+
+- `GITEE_TOKEN`（必需）：Gitee 个人访问令牌（PAT）
+
+说明：
+
+- 不需要保存 SSH 私钥。
+- 默认发布目标仓库是 `BitterVan/InkCrop`。
+- 如果 `GITEE_TOKEN` 未配置，Gitee 发布任务会自动跳过，不影响 GitHub Release。
