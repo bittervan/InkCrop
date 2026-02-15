@@ -24,6 +24,7 @@ BORDER_BAND_MIN = 24
 BBOX_DETECT_MAX_SIDE = 2400
 BBOX_PADDING_RATIO = 0.03
 BBOX_PROJ_RATIO = 0.002
+BBOX_MIN_PROJ_COVER_RATIO = 0.85
 
 A4_WIDTH = 210.0
 A4_HEIGHT = 297.0
@@ -135,7 +136,7 @@ def detect_bbox(binary):
         scale = BBOX_DETECT_MAX_SIDE / float(long_side)
         small_w = max(1, int(round(w * scale)))
         small_h = max(1, int(round(h * scale)))
-        ink_small = cv2.resize(
+        ink_small_raw = cv2.resize(
             ink_mask.astype(np.uint8),
             (small_w, small_h),
             interpolation=cv2.INTER_NEAREST
@@ -143,13 +144,22 @@ def detect_bbox(binary):
     else:
         scale = 1.0
         small_h, small_w = h, w
-        ink_small = ink_mask.astype(np.uint8)
+        ink_small_raw = ink_mask.astype(np.uint8)
+
+    ys_raw, xs_raw = np.where(ink_small_raw > 0)
+    if ys_raw.size == 0:
+        return None, {}
+    raw_top_s, raw_bottom_s = int(ys_raw.min()), int(ys_raw.max())
+    raw_left_s, raw_right_s = int(xs_raw.min()), int(xs_raw.max())
 
     ink_small = cv2.morphologyEx(
-        ink_small * 255,
+        ink_small_raw * 255,
         cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     ) > 0
+
+    if np.count_nonzero(ink_small) == 0:
+        ink_small = ink_small_raw > 0
 
     row_counts = np.count_nonzero(ink_small, axis=1)
     col_counts = np.count_nonzero(ink_small, axis=0)
@@ -163,14 +173,22 @@ def detect_bbox(binary):
     col_run = projection_bounds(col_counts, col_high, col_low)
 
     if row_run is None or col_run is None:
-        ys, xs = np.where(ink_small)
-        if ys.size == 0:
-            return None, {}
-        top_s, bottom_s = int(ys.min()), int(ys.max())
-        left_s, right_s = int(xs.min()), int(xs.max())
+        top_s, bottom_s = raw_top_s, raw_bottom_s
+        left_s, right_s = raw_left_s, raw_right_s
     else:
         top_s, bottom_s = row_run
         left_s, right_s = col_run
+
+        raw_box_h_s = raw_bottom_s - raw_top_s + 1
+        raw_box_w_s = raw_right_s - raw_left_s + 1
+        proj_box_h_s = bottom_s - top_s + 1
+        proj_box_w_s = right_s - left_s + 1
+
+        # 投影框过窄时回退到原始外接框，避免误裁边缘字符。
+        if proj_box_w_s < int(round(raw_box_w_s * BBOX_MIN_PROJ_COVER_RATIO)):
+            left_s, right_s = raw_left_s, raw_right_s
+        if proj_box_h_s < int(round(raw_box_h_s * BBOX_MIN_PROJ_COVER_RATIO)):
+            top_s, bottom_s = raw_top_s, raw_bottom_s
 
     if scale != 1.0:
         left = int(np.floor(left_s / scale))
@@ -197,6 +215,10 @@ def detect_bbox(binary):
         "detect_w": small_w,
         "row_high": row_high,
         "col_high": col_high,
+        "raw_top_s": raw_top_s,
+        "raw_bottom_s": raw_bottom_s,
+        "raw_left_s": raw_left_s,
+        "raw_right_s": raw_right_s,
         "raw_box_h": raw_box_h,
         "total_pad": total_pad,
     }
