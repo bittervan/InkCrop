@@ -11,6 +11,10 @@ import cv2
 import numpy as np
 from skimage.segmentation import clear_border
 
+BORDER_CLEAN_MAX_SIDE = 2400
+BORDER_BAND_RATIO = 0.03
+BORDER_BAND_MIN = 24
+
 
 def remove_border_connected_ink(binary):
     total_pixels = binary.size
@@ -21,22 +25,59 @@ def remove_border_connected_ink(binary):
     ink_is_white = white_pixels <= black_pixels
     ink_mask = (binary == 255) if ink_is_white else (binary == 0)
 
-    # 找到与图像边界连通的墨迹像素
-    inside_mask = clear_border(ink_mask, buffer_size=0)
-    border_connected = ink_mask & (~inside_mask)
-
-    # 只在边缘窄带内删除，避免“细桥连边”导致整块真实笔画被删
+    # 在降采样图上做边缘连通检测，速度更快
     h, w = ink_mask.shape
-    border_band = max(12, int(round(min(h, w) * 0.01)))
-    edge_band = np.zeros_like(ink_mask, dtype=bool)
-    edge_band[:border_band, :] = True
-    edge_band[h - border_band:, :] = True
-    edge_band[:, :border_band] = True
-    edge_band[:, w - border_band:] = True
+    long_side = max(h, w)
+    if long_side > BORDER_CLEAN_MAX_SIDE:
+        scale = BORDER_CLEAN_MAX_SIDE / float(long_side)
+        small_w = max(1, int(round(w * scale)))
+        small_h = max(1, int(round(h * scale)))
+        ink_small = cv2.resize(
+            ink_mask.astype(np.uint8),
+            (small_w, small_h),
+            interpolation=cv2.INTER_NEAREST
+        ).astype(bool)
+    else:
+        scale = 1.0
+        small_h, small_w = h, w
+        ink_small = ink_mask
 
-    remove_mask = border_connected & edge_band
+    # 找到与图像边界连通的墨迹像素
+    inside_small = clear_border(ink_small, buffer_size=0)
+    border_connected_small = ink_small & (~inside_small)
+
+    # 只移除边缘带里的边缘连通墨迹
+    border_band_small = max(BORDER_BAND_MIN, int(round(min(small_h, small_w) * BORDER_BAND_RATIO)))
+    edge_band_small = np.zeros_like(ink_small, dtype=bool)
+    edge_band_small[:border_band_small, :] = True
+    edge_band_small[small_h - border_band_small:, :] = True
+    edge_band_small[:, :border_band_small] = True
+    edge_band_small[:, small_w - border_band_small:] = True
+
+    remove_small = border_connected_small & edge_band_small
+
+    # 轻微膨胀，防止保留边缘脏带的细碎残留
+    remove_small_u8 = cv2.dilate(
+        remove_small.astype(np.uint8) * 255,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+        iterations=1
+    )
+    remove_small = remove_small_u8 > 0
+
+    # 回投到原图尺寸再删除
+    if scale != 1.0:
+        remove_mask = cv2.resize(
+            remove_small.astype(np.uint8),
+            (w, h),
+            interpolation=cv2.INTER_NEAREST
+        ).astype(bool)
+    else:
+        remove_mask = remove_small
+
+    remove_mask &= ink_mask
     ink_mask_clean = ink_mask & (~remove_mask)
     removed_pixels = int(np.count_nonzero(remove_mask))
+    border_band = int(round(border_band_small / scale))
 
     if ink_is_white:
         cleaned_binary = np.where(ink_mask_clean, 255, 0).astype(np.uint8)
