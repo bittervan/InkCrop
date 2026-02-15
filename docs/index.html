@@ -107,11 +107,19 @@
               <input id="optWebMaxSide" type="number" min="2000" max="50000" step="500" value="24000" />
             </div>
 
+            <div class="control-group">
+              <label>
+                <input id="optDebugMode" type="checkbox" />
+                开启调试模式（输出更多日志并支持下载调试数据）
+              </label>
+            </div>
+
             <div class="tool-actions">
               <button id="runBtn" class="btn btn-solid" type="button">开始处理</button>
               <button id="downloadBinaryBtn" class="btn btn-outline" type="button" disabled>下载二值图</button>
               <button id="downloadBoxBtn" class="btn btn-outline" type="button" disabled>下载框选图</button>
               <button id="downloadPdfBtn" class="btn btn-outline" type="button" disabled>下载 A4 PDF</button>
+              <button id="downloadDebugBtn" class="btn btn-outline" type="button" disabled>下载调试 JSON</button>
             </div>
 
             <p id="runtimeInfo" class="runtime-info">状态：等待 OpenCV.js 加载</p>

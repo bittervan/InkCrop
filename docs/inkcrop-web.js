@@ -35,11 +35,13 @@ function initDomRefs() {
   dom.optMarginMm = byId("optMarginMm");
   dom.optJpegQuality = byId("optJpegQuality");
   dom.optWebMaxSide = byId("optWebMaxSide");
+  dom.optDebugMode = byId("optDebugMode");
 
   dom.runBtn = byId("runBtn");
   dom.downloadBinaryBtn = byId("downloadBinaryBtn");
   dom.downloadBoxBtn = byId("downloadBoxBtn");
   dom.downloadPdfBtn = byId("downloadPdfBtn");
+  dom.downloadDebugBtn = byId("downloadDebugBtn");
 
   dom.runtimeInfo = byId("runtimeInfo");
   dom.logBox = byId("logBox");
@@ -70,6 +72,34 @@ function appendLog(message) {
   dom.logBox.scrollTop = dom.logBox.scrollHeight;
 }
 
+function formatErrorMessage(error) {
+  const raw =
+    error && typeof error === "object" && "message" in error
+      ? String(error.message || "")
+      : String(error ?? "");
+  const trimmed = raw.trim();
+
+  const numericCode =
+    typeof error === "number"
+      ? String(error)
+      : /^\d+$/.test(trimmed)
+      ? trimmed
+      : null;
+
+  if (numericCode) {
+    return (
+      `OpenCV.js 内部错误（代码 ${numericCode}）。` +
+      "通常是浏览器内存/尺寸限制导致。请把“网页最大边”调小后重试（建议 16000 或 12000）。"
+    );
+  }
+
+  if (/out of memory|oom|cannot enlarge memory|abort\(/i.test(trimmed)) {
+    return "浏览器内存不足，请把“网页最大边”调小后重试（建议 16000 或 12000）。";
+  }
+
+  return trimmed || "未知错误";
+}
+
 function resetPreviewCanvas(canvas) {
   canvas.width = 4;
   canvas.height = 4;
@@ -97,6 +127,7 @@ function parseOptions() {
   const marginMm = clamp(Number(dom.optMarginMm.value || 5), 0, 30);
   const jpegQuality = clamp(Number(dom.optJpegQuality.value || 90), 40, 100);
   const webMaxSide = clamp(Number(dom.optWebMaxSide.value || 24000), 2000, 50000);
+  const debugMode = Boolean(dom.optDebugMode && dom.optDebugMode.checked);
   return {
     detectMaxSide,
     paddingRatio,
@@ -104,13 +135,15 @@ function parseOptions() {
     marginMm,
     jpegQuality,
     webMaxSide,
+    debugMode,
   };
 }
 
-function setDownloadButtonsEnabled(binaryEnabled, pdfEnabled) {
+function setDownloadButtonsEnabled(binaryEnabled, pdfEnabled, debugEnabled) {
   dom.downloadBinaryBtn.disabled = !binaryEnabled;
   dom.downloadBoxBtn.disabled = !binaryEnabled;
   dom.downloadPdfBtn.disabled = !pdfEnabled;
+  dom.downloadDebugBtn.disabled = !debugEnabled;
 }
 
 function safeBaseName(name) {
@@ -124,6 +157,16 @@ function downloadCanvas(canvas, filename) {
   a.href = dataUrl;
   a.download = filename;
   a.click();
+}
+
+function downloadTextFile(text, filename) {
+  const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 async function ensureCvReady(timeoutMs = 60000) {
@@ -205,7 +248,7 @@ async function loadSelectedImage() {
     drawPreviewFromCanvas(canvas, dom.originalCanvas);
     resetPreviewCanvas(dom.binaryCanvas);
     resetPreviewCanvas(dom.boxCanvas);
-    setDownloadButtonsEnabled(false, false);
+    setDownloadButtonsEnabled(false, false, false);
     appState.result = null;
 
     if (scale < requestedScale - 1e-6) {
@@ -1081,6 +1124,51 @@ function drawBoxedResult(sourceBgr, bbox, boundaries) {
   return boxed;
 }
 
+function computeBoundaryInkStats(inkRoi, boundaries) {
+  if (!inkRoi || !boundaries || boundaries.length <= 2) {
+    return null;
+  }
+  const values = [];
+  const points = [];
+  for (let i = 1; i < boundaries.length - 1; i += 1) {
+    const b = boundaries[i];
+    const left = Math.max(0, b - 1);
+    const right = Math.min(inkRoi.cols, b + 2);
+    const width = right - left;
+    if (width <= 0) {
+      continue;
+    }
+    const band = inkRoi.roi(new cv.Rect(left, 0, width, inkRoi.rows));
+    const v = cv.countNonZero(band);
+    band.delete();
+    values.push(v);
+    points.push({ boundary: b, ink3px: v });
+  }
+  if (values.length === 0) {
+    return null;
+  }
+
+  const sortedVals = values.slice().sort((a, b) => a - b);
+  const percentile = (p) => {
+    const idx = Math.max(0, Math.min(sortedVals.length - 1, Math.round((p / 100) * (sortedVals.length - 1))));
+    return sortedVals[idx];
+  };
+
+  const topBad = points
+    .slice()
+    .sort((a, b) => b.ink3px - a.ink3px)
+    .slice(0, 10);
+
+  const sum = values.reduce((acc, v) => acc + v, 0);
+  return {
+    mean: sum / values.length,
+    p90: percentile(90),
+    p95: percentile(95),
+    max: sortedVals[sortedVals.length - 1],
+    topBad,
+  };
+}
+
 async function runProcessing() {
   await ensureCvReady();
 
@@ -1146,6 +1234,7 @@ async function runProcessing() {
     let pages = 0;
     let maxColWidth = 0;
 
+    let debugStats = null;
     if (bbox) {
       maxColWidth = Math.max(1, Math.min(Math.round(bbox.h / WEB_DEFAULTS.a4Ratio), bbox.w));
       const inkInfo = getInkInfo(binaryClean);
@@ -1160,6 +1249,9 @@ async function runProcessing() {
         splitInfo
       );
       pages = Math.max(0, boundaries.length - 1);
+      if (options.debugMode) {
+        debugStats = computeBoundaryInkStats(roi, boundaries);
+      }
     }
 
     const boxed = drawBoxedResult(sourceBgr, bbox, boundaries);
@@ -1182,13 +1274,32 @@ async function runProcessing() {
       binaryCanvas: binaryOutCanvas,
       boxCanvas: boxOutCanvas,
       sourceCanvas: appState.sourceCanvas,
+      debug: {
+        sourceOriginal: appState.sourceOriginalSize,
+        sourceProcessed: {
+          width: appState.sourceCanvas.width,
+          height: appState.sourceCanvas.height,
+          scale: appState.scaleFromOriginal,
+        },
+        bbox,
+        bboxInfo: bboxRes.info,
+        splitInfo,
+        boundaries,
+        boundaryInkStats: debugStats,
+      },
     };
+    window.inkcropLastResult = appState.result;
 
-    setDownloadButtonsEnabled(true, Boolean(bbox));
+    setDownloadButtonsEnabled(true, Boolean(bbox), true);
     const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
     const mode = whiteArea > blackArea ? "白底黑字（无需反转）" : "黑底白字（已反转）";
 
     appendLog(`处理完成，耗时 ${elapsed}s，模式=${mode}`);
+    appendLog(
+      `process_size: ${appState.sourceCanvas.width}x${appState.sourceCanvas.height}, source_scale=${appState.scaleFromOriginal.toFixed(
+        4
+      )}`
+    );
     if (bbox) {
       appendLog(
         `bbox: x=${bbox.x}, y=${bbox.y}, w=${bbox.w}, h=${bbox.h}, ` +
@@ -1202,6 +1313,11 @@ async function runProcessing() {
         );
         appendLog(
           `strong_valleys: ${splitInfo.strongCandidateCount || 0}/${splitInfo.candidateCount || 0}`
+        );
+      }
+      if (options.debugMode && debugStats) {
+        appendLog(
+          `boundary_ink(3px): mean=${debugStats.mean.toFixed(2)}, p95=${debugStats.p95}, max=${debugStats.max}`
         );
       }
     } else {
@@ -1315,8 +1431,9 @@ function bindEvents() {
       await loadSelectedImage();
       setRuntime("输入图已加载");
     } catch (error) {
-      setRuntime(error.message, true);
-      appendLog(`加载失败：${error.message}`);
+      const message = formatErrorMessage(error);
+      setRuntime(message, true);
+      appendLog(`加载失败：${message}`);
     }
   });
 
@@ -1325,8 +1442,9 @@ function bindEvents() {
     try {
       await runProcessing();
     } catch (error) {
-      setRuntime(error.message || String(error), true);
-      appendLog(`处理失败：${error.message || String(error)}`);
+      const message = formatErrorMessage(error);
+      setRuntime(message, true);
+      appendLog(`处理失败：${message}`);
     } finally {
       dom.runBtn.disabled = false;
     }
@@ -1352,24 +1470,35 @@ function bindEvents() {
     try {
       downloadPdf();
     } catch (error) {
-      setRuntime(error.message || String(error), true);
-      appendLog(`PDF 导出失败：${error.message || String(error)}`);
+      const message = formatErrorMessage(error);
+      setRuntime(message, true);
+      appendLog(`PDF 导出失败：${message}`);
     }
+  });
+
+  dom.downloadDebugBtn.addEventListener("click", () => {
+    if (!appState.result || !appState.result.debug) {
+      return;
+    }
+    const base = safeBaseName(appState.sourceName);
+    const text = JSON.stringify(appState.result.debug, null, 2);
+    downloadTextFile(text, `${base}_debug.json`);
   });
 }
 
 async function boot() {
   initDomRefs();
   bindEvents();
-  setDownloadButtonsEnabled(false, false);
+  setDownloadButtonsEnabled(false, false, false);
   resetPreviewCanvas(dom.originalCanvas);
   resetPreviewCanvas(dom.binaryCanvas);
   resetPreviewCanvas(dom.boxCanvas);
   try {
     await ensureCvReady();
   } catch (error) {
-    setRuntime(error.message, true);
-    appendLog(`初始化失败：${error.message}`);
+    const message = formatErrorMessage(error);
+    setRuntime(message, true);
+    appendLog(`初始化失败：${message}`);
   }
 }
 
