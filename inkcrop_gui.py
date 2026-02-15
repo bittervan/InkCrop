@@ -6,6 +6,7 @@ import shlex
 import shutil
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -34,7 +35,6 @@ class InkCropWindow(QMainWindow):
         self.setWindowTitle("InkCrop GUI (PySide6)")
         self.resize(1040, 700)
 
-        self.script_dir = Path(__file__).resolve().parent
         self.cache_dir = self._resolve_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -207,14 +207,8 @@ class InkCropWindow(QMainWindow):
             "pdf_out": pdf_out,
         }
 
-        args = [
-            str(self.script_dir / "simple_binary.py"),
-            str(input_path),
-            str(binary_out),
-            str(box_out),
-            str(pdf_out),
-        ]
-        command_str = shlex.join([sys.executable, *args])
+        program, args = self._build_worker_command(input_path, binary_out, box_out, pdf_out)
+        command_str = shlex.join([program, *args])
         self._append_log_line(f"缓存目录: {run_cache_dir}")
         self._append_log_line(f"$ {command_str}")
 
@@ -223,9 +217,27 @@ class InkCropWindow(QMainWindow):
         self.process.readyReadStandardOutput.connect(self._on_process_output)
         self.process.finished.connect(self._on_process_finished)
         self.process.errorOccurred.connect(self._on_process_error)
-        self.process.start(sys.executable, args)
+        self.process.start(program, args)
 
         self._set_running(True)
+
+    def _build_worker_command(
+        self,
+        input_path: Path,
+        binary_out: Path,
+        box_out: Path,
+        pdf_out: Path,
+    ) -> tuple[str, list[str]]:
+        worker_args = [
+            "--worker",
+            str(input_path),
+            str(binary_out),
+            str(box_out),
+            str(pdf_out),
+        ]
+        if getattr(sys, "frozen", False):
+            return sys.executable, worker_args
+        return sys.executable, [str(Path(__file__).resolve()), *worker_args]
 
     def _on_process_output(self):
         if self.process is None:
@@ -380,14 +392,53 @@ def apply_app_style(app: QApplication):
     app.setStyleSheet(_theme_stylesheet(mode))
 
 
+def run_worker_mode(args: list[str]) -> int:
+    if len(args) < 4:
+        print("错误：worker 参数不足")
+        print("用法: inkcrop_gui.py --worker <input> <binary_out> <box_out> <pdf_out>")
+        return 2
+
+    input_path, binary_out, box_out, pdf_out = args[:4]
+    try:
+        import simple_binary
+    except Exception as exc:
+        print(f"错误：无法导入 simple_binary: {exc}")
+        traceback.print_exc()
+        return 1
+
+    original_argv = sys.argv[:]
+    try:
+        sys.argv = [
+            "simple_binary.py",
+            input_path,
+            binary_out,
+            box_out,
+            pdf_out,
+        ]
+        simple_binary.main()
+        return 0
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        return code
+    except Exception as exc:
+        print(f"错误：处理失败: {exc}")
+        traceback.print_exc()
+        return 1
+    finally:
+        sys.argv = original_argv
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--worker":
+        return run_worker_mode(sys.argv[2:])
+
     app = QApplication(sys.argv)
     apply_app_style(app)
     app.styleHints().colorSchemeChanged.connect(lambda _: apply_app_style(app))
     window = InkCropWindow()
     window.show()
-    sys.exit(app.exec())
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
