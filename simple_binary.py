@@ -24,7 +24,7 @@ BORDER_BAND_MIN = 24
 
 BBOX_DETECT_MAX_SIDE = 2400
 BBOX_PADDING = 12
-BBOX_EXTRA_PADDING = 8
+BBOX_EXTRA_PADDING = 12
 BBOX_SCALE_SAFETY = 2.0
 BBOX_PROJ_RATIO = 0.002
 
@@ -279,43 +279,43 @@ def detect_split_candidates(ink_roi):
 def build_column_boundaries(total_width, max_col_width, split_candidates):
     max_col_width = max(1, min(int(max_col_width), int(total_width)))
     min_col_width = max(80, int(round(max_col_width * 0.60)))
-    min_tail_width = max(80, int(round(max_col_width * 0.45)))
+    min_left_width = max(80, int(round(max_col_width * 0.45)))
 
     candidates = sorted(set(c for c in split_candidates if 0 < c < total_width))
-    boundaries = [0]
-    start = 0
+    # 按“从右到左”切分：优先确定右侧整列，余量留在最左侧
+    boundaries_desc = [total_width]
+    end = total_width
 
-    while (total_width - start) > max_col_width:
-        low = start + min_col_width
-        high = start + max_col_width
+    while end > max_col_width:
+        low = end - max_col_width
+        high = end - min_col_width
         feasible = [c for c in candidates if low <= c <= high]
 
         if feasible:
             split = None
-            for c in reversed(feasible):
-                remaining = total_width - c
-                if remaining >= min_tail_width or remaining <= max_col_width:
+            # 选更靠左的切点，得到更宽的当前右侧列
+            for c in feasible:
+                remaining = c
+                if remaining >= min_left_width or remaining <= max_col_width:
                     split = c
                     break
             if split is None:
-                split = feasible[-1]
+                split = feasible[0]
         else:
-            split = high
+            split = low
 
-        if split <= start:
-            split = min(start + max_col_width, total_width)
-            if split <= start:
+        if split >= end:
+            split = max(0, end - max_col_width)
+            if split >= end:
                 break
 
-        boundaries.append(split)
-        start = split
+        boundaries_desc.append(split)
+        end = split
 
-    if boundaries[-1] != total_width:
-        boundaries.append(total_width)
+    if boundaries_desc[-1] != 0:
+        boundaries_desc.append(0)
 
-    if len(boundaries) >= 3 and (boundaries[-1] - boundaries[-2]) < max(40, int(round(max_col_width * 0.30))):
-        boundaries.pop(-2)
-
+    boundaries = sorted(set(boundaries_desc))
     normalized = [boundaries[0]]
     for b in boundaries[1:]:
         if b > normalized[-1]:
@@ -334,7 +334,8 @@ def save_columns_to_a4_pdf(image, bbox, boundaries, pdf_output_path):
     c = canvas.Canvas(str(pdf_output_path), pagesize=A4)
     page_count = 0
 
-    for i in range(len(boundaries) - 1):
+    # 固定按右到左分页输出
+    for i in range(len(boundaries) - 2, -1, -1):
         left = boundaries[i]
         right = boundaries[i + 1]
         if right <= left:
@@ -438,6 +439,7 @@ def main():
     pages = 0
     max_col_width = 0
     split_info = {}
+    col_widths = []
     if bbox is not None:
         x, y, w, h = bbox
         max_col_width = int(round(h / A4_RATIO))
@@ -447,6 +449,7 @@ def main():
         roi_ink = ink_mask[y:y + h, x:x + w]
         split_candidates, split_info = detect_split_candidates(roi_ink)
         boundaries = build_column_boundaries(w, max_col_width, split_candidates)
+        col_widths = [boundaries[i + 1] - boundaries[i] for i in range(len(boundaries) - 1)]
 
         for b in boundaries[1:-1]:
             cv2.line(boxed, (x + b, y), (x + b, y + h - 1), (255, 128, 0), 1)
@@ -476,8 +479,10 @@ def main():
         )
         print(
             f"  分页: max_col_width={max_col_width}, split_candidates={split_info.get('candidate_count', 0)}, "
-            f"列数={max(0, len(boundaries)-1)}, PDF页数={pages}"
+            f"列数={max(0, len(boundaries)-1)}, PDF页数={pages}, 顺序=右到左"
         )
+        if col_widths:
+            print(f"  列宽: 最右={col_widths[-1]}, 最左={col_widths[0]}")
 
     print("\n说明:")
     print("  - 白色区域 = 墨迹")
