@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="InkCrop：书法长卷二值化、稳健框选、A4 自动分页导出工具。"
+      content="InkCrop：书法长卷二值化、稳健框选、A4 自动分页导出工具，支持纯静态网页运行。"
     />
-    <title>InkCrop | 长卷裁切与 A4 分页</title>
+    <title>InkCrop | 静态网页版</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -22,11 +22,11 @@
       <div class="container nav-wrap">
         <a class="brand" href="#top">
           <span class="brand-ink">InkCrop</span>
-          <span class="brand-sub">Calligraphy Pipeline</span>
+          <span class="brand-sub">Static Web Edition</span>
         </a>
         <nav class="nav">
-          <a href="#features">能力</a>
-          <a href="#quickstart">快速开始</a>
+          <a href="#playground">在线处理</a>
+          <a href="#quickstart">本地命令</a>
           <a href="#gallery">效果</a>
           <a href="#deploy">部署</a>
         </nav>
@@ -37,62 +37,108 @@
       <section class="hero container reveal">
         <div class="hero-left">
           <p class="hero-kicker">Open Source Tooling for Scroll Art</p>
-          <h1>把超长书法图<br />切成稳定、可打印的 A4 页面</h1>
+          <h1>纯静态网页里完成<br />二值化、框选、A4 分页</h1>
           <p class="hero-desc">
-            InkCrop 聚焦三件事：二值化、稳健框选、按右到左分页导出 PDF。
-            最新版本已优化长卷性能，并降低左右误裁风险。
+            现在不依赖后端，直接在浏览器运行 InkCrop 管线。上传图片后即可生成
+            二值图、框选预览图和 A4 PDF。
           </p>
           <div class="hero-cta">
-            <a class="btn btn-solid" href="#quickstart">开始使用</a>
-            <a class="btn btn-outline" href="#deploy">发布到 GitHub Pages</a>
+            <a class="btn btn-solid" href="#playground">打开在线处理</a>
+            <a class="btn btn-outline" href="#quickstart">查看 CLI 命令</a>
           </div>
           <ul class="hero-metrics">
-            <li><strong>6x+</strong><span>PDF 导出提速</span></li>
-            <li><strong>5mm</strong><span>A4 页面边距</span></li>
-            <li><strong>0.043%</strong><span>框外墨迹（示例）</span></li>
+            <li><strong>Client-only</strong><span>GitHub Pages 可直接托管</span></li>
+            <li><strong>5mm</strong><span>A4 页面边距默认值</span></li>
+            <li><strong>右到左</strong><span>分页顺序与 Python 版一致</span></li>
           </ul>
         </div>
         <div class="hero-right">
           <div class="command-card">
-            <h2>快速命令</h2>
-            <pre><code id="cmd-main">python simple_binary.py "tests/你的图片.jpg" "outputs/out_binary.jpg" "outputs/out_box.jpg" "outputs/out_a4.pdf"</code></pre>
-            <button class="copy-btn" data-copy-target="cmd-main">复制命令</button>
-            <p>支持单图处理与批处理脚本 `batch_binary.sh`。</p>
+            <h2>网页功能</h2>
+            <ul class="tool-list">
+              <li>上传图片后本地处理，不上传到服务器</li>
+              <li>支持下载二值图、框选图、A4 PDF</li>
+              <li>参数可调：补边、检测缩放、PDF 质量等</li>
+              <li>超大图会自动降采样以适配浏览器限制</li>
+            </ul>
           </div>
         </div>
       </section>
 
-      <section id="features" class="section container reveal">
+      <section id="playground" class="section container reveal">
         <div class="section-head">
-          <h2>核心能力</h2>
-          <p>围绕“长卷书法可打印”做了专门优化。</p>
+          <h2>在线处理工具</h2>
+          <p>先上传一张图片，再点击“开始处理”。</p>
         </div>
-        <div class="feature-grid">
-          <article class="feature-card">
-            <h3>稳健框选</h3>
-            <p>
-              使用降采样投影 + 原始外接框兜底策略，防止左右边缘字被激进裁掉。
-            </p>
-          </article>
-          <article class="feature-card">
-            <h3>极速导出</h3>
-            <p>
-              PDF 页先编码为临时 JPEG 再嵌入，显著减少 ReportLab 编码耗时。
-            </p>
-          </article>
-          <article class="feature-card">
-            <h3>长卷分页</h3>
-            <p>
-              自动检测切分候选并按右到左分页，控制列宽适配 A4 打印比例。
-            </p>
-          </article>
+        <div class="tool-grid">
+          <div class="tool-panel controls-panel">
+            <div class="control-group">
+              <label for="fileInput">输入图片</label>
+              <input id="fileInput" type="file" accept="image/*" />
+            </div>
+
+            <div class="control-group">
+              <label for="optDetectMaxSide">检测最大边（降采样）</label>
+              <input id="optDetectMaxSide" type="number" min="400" max="6000" step="50" value="2400" />
+            </div>
+
+            <div class="control-group">
+              <label for="optPaddingRatio">框补边比例</label>
+              <input id="optPaddingRatio" type="number" min="0" max="0.2" step="0.005" value="0.03" />
+            </div>
+
+            <div class="control-group">
+              <label for="optMinCoverRatio">投影兜底比例</label>
+              <input id="optMinCoverRatio" type="number" min="0.5" max="1" step="0.01" value="0.85" />
+            </div>
+
+            <div class="control-group">
+              <label for="optMarginMm">A4 边距（mm）</label>
+              <input id="optMarginMm" type="number" min="0" max="30" step="0.5" value="5" />
+            </div>
+
+            <div class="control-group">
+              <label for="optJpegQuality">PDF JPEG 质量（0-100）</label>
+              <input id="optJpegQuality" type="number" min="40" max="100" step="1" value="90" />
+            </div>
+
+            <div class="control-group">
+              <label for="optWebMaxSide">网页最大边（自动缩图上限）</label>
+              <input id="optWebMaxSide" type="number" min="2000" max="20000" step="500" value="16384" />
+            </div>
+
+            <div class="tool-actions">
+              <button id="runBtn" class="btn btn-solid" type="button">开始处理</button>
+              <button id="downloadBinaryBtn" class="btn btn-outline" type="button" disabled>下载二值图</button>
+              <button id="downloadBoxBtn" class="btn btn-outline" type="button" disabled>下载框选图</button>
+              <button id="downloadPdfBtn" class="btn btn-outline" type="button" disabled>下载 A4 PDF</button>
+            </div>
+
+            <p id="runtimeInfo" class="runtime-info">状态：等待 OpenCV.js 加载</p>
+            <pre id="logBox" class="log-box">[init] 页面已就绪</pre>
+          </div>
+
+          <div class="tool-panel preview-panel">
+            <figure>
+              <figcaption>输入预览</figcaption>
+              <canvas id="originalCanvas"></canvas>
+            </figure>
+            <figure>
+              <figcaption>二值图预览</figcaption>
+              <canvas id="binaryCanvas"></canvas>
+            </figure>
+            <figure>
+              <figcaption>框选预览</figcaption>
+              <canvas id="boxCanvas"></canvas>
+            </figure>
+          </div>
         </div>
       </section>
 
       <section id="quickstart" class="section container reveal">
         <div class="section-head">
-          <h2>快速开始</h2>
-          <p>本地执行 Python 脚本，输出二值图、框选图与 A4 PDF。</p>
+          <h2>CLI 快速开始</h2>
+          <p>如果你更习惯本地脚本，保留了 Python 版本同等流程。</p>
         </div>
         <div class="steps">
           <article class="step-card">
@@ -110,17 +156,6 @@
             <pre><code id="cmd-batch">bash batch_binary.sh</code></pre>
             <button class="copy-btn" data-copy-target="cmd-batch">复制</button>
           </article>
-        </div>
-
-        <div class="param-panel">
-          <h3>常用参数与策略</h3>
-          <div class="param-grid">
-            <p><code>BBOX_DETECT_MAX_SIDE=2400</code>：框选检测降采样最大边。</p>
-            <p><code>BBOX_PADDING_RATIO=0.03</code>：检测框上下左右补边比例。</p>
-            <p><code>BBOX_MIN_PROJ_COVER_RATIO=0.85</code>：投影框兜底阈值。</p>
-            <p><code>PDF_PAGE_MARGIN_MM=5.0</code>：A4 页面边距（毫米）。</p>
-            <p><code>PDF_IMAGE_JPEG_QUALITY=90</code>：PDF 图像嵌入质量。</p>
-          </div>
         </div>
       </section>
 
@@ -151,25 +186,22 @@
           <p>仓库内已包含自动部署 workflow，推送后即可发布。</p>
         </div>
         <ol class="deploy-list">
-          <li>将代码推送到 GitHub 仓库的默认分支（建议 <code>main</code>）。</li>
-          <li>在仓库设置中进入 <code>Settings -> Pages</code>。</li>
-          <li>
-            Source 选择 <code>GitHub Actions</code>，等待 workflow
-            完成部署。
-          </li>
+          <li>将代码推送到 GitHub 仓库默认分支（`main` 或 `master`）。</li>
+          <li>在仓库设置打开 `Settings -> Pages`。</li>
+          <li>Source 选择 `GitHub Actions`，等待部署完成。</li>
         </ol>
-        <p class="deploy-note">
-          页面内容来自 <code>docs/</code> 目录，入口为 <code>docs/index.html</code>。
-        </p>
       </section>
     </main>
 
     <footer class="site-footer">
       <div class="container">
-        <p>InkCrop · Built for Chinese calligraphy scroll workflows.</p>
+        <p>InkCrop · Browser-first pipeline for calligraphy scrolls.</p>
       </div>
     </footer>
 
-    <script src="./app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js" defer></script>
+    <script src="https://docs.opencv.org/4.x/opencv.js" async></script>
+    <script src="./app.js" defer></script>
+    <script src="./inkcrop-web.js" defer></script>
   </body>
 </html>
