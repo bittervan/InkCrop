@@ -1,12 +1,12 @@
 #!/bin/bash
-# 批量二值化并输出加框预览图
+# 批量二值化并输出加框预览图 + A4分页PDF
 # 输入: tests/*.jpg
-# 输出: outputs/*_binary.jpg, outputs/*_crop_box.jpg
+# 输出: outputs/*_binary.jpg, outputs/*_crop_box.jpg, outputs/*_a4.pdf
 
 cd "$(dirname "$0")"
 
 echo "=========================================="
-echo "批量二值化 + 加框预览"
+echo "批量二值化 + 加框预览 + A4分页PDF"
 echo "输入: tests 目录"
 echo "输出: outputs 目录"
 echo "=========================================="
@@ -32,12 +32,14 @@ for img in "$tests_dir"/*.jpg; do
 
         binary_out="$outputs_dir/${stem}_binary${ext}"
         box_out="$outputs_dir/${stem}_crop_box${ext}"
+        pdf_out="$outputs_dir/${stem}_a4.pdf"
 
         echo "[$count/$total] 处理: $filename"
         echo "  - 二值图: $(basename "$binary_out")"
         echo "  - 框预览: $(basename "$box_out")"
+        echo "  - A4 PDF: $(basename "$pdf_out")"
 
-        python "$script_dir/simple_binary.py" "$img" "$binary_out" "$box_out"
+        python "$script_dir/simple_binary.py" "$img" "$binary_out" "$box_out" "$pdf_out"
 
         if [ $? -eq 0 ]; then
             echo "  ✓ 完成"
@@ -53,4 +55,5 @@ echo "✓ 批量处理完成！"
 echo "共处理了 $count 张图片"
 echo "二值图: outputs/*_binary.jpg"
 echo "框预览: outputs/*_crop_box.jpg"
+echo "A4 PDF: outputs/*_a4.pdf"
 echo "=========================================="

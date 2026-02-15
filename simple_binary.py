@@ -11,6 +11,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 from skimage.segmentation import clear_border
 
 
@@ -23,6 +27,11 @@ BBOX_PADDING = 12
 BBOX_EXTRA_PADDING = 8
 BBOX_SCALE_SAFETY = 2.0
 BBOX_PROJ_RATIO = 0.002
+
+A4_WIDTH = 210.0
+A4_HEIGHT = 297.0
+A4_RATIO = A4_HEIGHT / A4_WIDTH
+PDF_PAGE_MARGIN_PT = 24
 
 
 def get_ink_mask(binary):
@@ -194,10 +203,169 @@ def detect_bbox(binary):
     return (left, top, right - left + 1, bottom - top + 1), info
 
 
+def detect_split_candidates(ink_roi):
+    h, w = ink_roi.shape
+    if w <= 0:
+        return [], {}
+
+    if w > BBOX_DETECT_MAX_SIDE:
+        scale = BBOX_DETECT_MAX_SIDE / float(w)
+        small_w = BBOX_DETECT_MAX_SIDE
+        small_h = max(1, int(round(h * scale)))
+        roi_small = cv2.resize(
+            ink_roi.astype(np.uint8),
+            (small_w, small_h),
+            interpolation=cv2.INTER_NEAREST
+        )
+    else:
+        scale = 1.0
+        small_h, small_w = h, w
+        roi_small = ink_roi.astype(np.uint8)
+
+    proj = np.count_nonzero(roi_small > 0, axis=0).astype(np.float32)
+    smooth = smooth_projection(proj)
+
+    if np.max(smooth) <= 0:
+        return [], {
+            "split_scale": scale,
+            "split_detect_w": small_w,
+            "candidate_count": 0,
+        }
+
+    valley_thresh = float(np.percentile(smooth, 24))
+    valley_mask = smooth <= valley_thresh
+
+    valley_u8 = (valley_mask.astype(np.uint8) * 255).reshape(1, -1)
+    close_k = max(3, int(round(small_w * 0.003)))
+    if close_k % 2 == 0:
+        close_k += 1
+    valley_u8 = cv2.morphologyEx(
+        valley_u8,
+        cv2.MORPH_CLOSE,
+        np.ones((1, close_k), dtype=np.uint8)
+    )
+    valley_mask = valley_u8.ravel() > 0
+
+    centers_small = []
+    start = None
+    for i, flag in enumerate(valley_mask):
+        if flag and start is None:
+            start = i
+        elif (not flag) and start is not None:
+            centers_small.append((start + i - 1) // 2)
+            start = None
+    if start is not None:
+        centers_small.append((start + len(valley_mask) - 1) // 2)
+
+    edge_margin = max(2, int(round(small_w * 0.01)))
+    centers_small = [
+        c for c in centers_small
+        if edge_margin < c < (small_w - edge_margin)
+    ]
+
+    if scale != 1.0:
+        centers = sorted(set(int(round(c / scale)) for c in centers_small))
+    else:
+        centers = sorted(set(int(c) for c in centers_small))
+
+    centers = [c for c in centers if 0 < c < w]
+    return centers, {
+        "split_scale": scale,
+        "split_detect_w": small_w,
+        "candidate_count": len(centers),
+    }
+
+
+def build_column_boundaries(total_width, max_col_width, split_candidates):
+    max_col_width = max(1, min(int(max_col_width), int(total_width)))
+    min_col_width = max(80, int(round(max_col_width * 0.60)))
+    min_tail_width = max(80, int(round(max_col_width * 0.45)))
+
+    candidates = sorted(set(c for c in split_candidates if 0 < c < total_width))
+    boundaries = [0]
+    start = 0
+
+    while (total_width - start) > max_col_width:
+        low = start + min_col_width
+        high = start + max_col_width
+        feasible = [c for c in candidates if low <= c <= high]
+
+        if feasible:
+            split = None
+            for c in reversed(feasible):
+                remaining = total_width - c
+                if remaining >= min_tail_width or remaining <= max_col_width:
+                    split = c
+                    break
+            if split is None:
+                split = feasible[-1]
+        else:
+            split = high
+
+        if split <= start:
+            split = min(start + max_col_width, total_width)
+            if split <= start:
+                break
+
+        boundaries.append(split)
+        start = split
+
+    if boundaries[-1] != total_width:
+        boundaries.append(total_width)
+
+    if len(boundaries) >= 3 and (boundaries[-1] - boundaries[-2]) < max(40, int(round(max_col_width * 0.30))):
+        boundaries.pop(-2)
+
+    normalized = [boundaries[0]]
+    for b in boundaries[1:]:
+        if b > normalized[-1]:
+            normalized.append(b)
+    if normalized[-1] != total_width:
+        normalized.append(total_width)
+    return normalized
+
+
+def save_columns_to_a4_pdf(image, bbox, boundaries, pdf_output_path):
+    x, y, w, h = bbox
+    page_w, page_h = A4
+    usable_w = page_w - 2 * PDF_PAGE_MARGIN_PT
+    usable_h = page_h - 2 * PDF_PAGE_MARGIN_PT
+
+    c = canvas.Canvas(str(pdf_output_path), pagesize=A4)
+    page_count = 0
+
+    for i in range(len(boundaries) - 1):
+        left = boundaries[i]
+        right = boundaries[i + 1]
+        if right <= left:
+            continue
+
+        seg = image[y:y + h, x + left:x + right]
+        if seg.size == 0:
+            continue
+
+        seg_rgb = cv2.cvtColor(seg, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(seg_rgb)
+        img_w, img_h = pil_img.size
+
+        scale = min(usable_w / img_w, usable_h / img_h)
+        draw_w = img_w * scale
+        draw_h = img_h * scale
+        draw_x = (page_w - draw_w) / 2.0
+        draw_y = (page_h - draw_h) / 2.0
+
+        c.drawImage(ImageReader(pil_img), draw_x, draw_y, draw_w, draw_h)
+        c.showPage()
+        page_count += 1
+
+    c.save()
+    return page_count
+
+
 def main():
     if len(sys.argv) < 2:
-        print("用法: python simple_binary.py <输入图片> [二值图输出] [加框图输出]")
-        print("示例: python simple_binary.py input.jpg outputs/input_binary.jpg outputs/input_crop_box.jpg")
+        print("用法: python simple_binary.py <输入图片> [二值图输出] [加框图输出] [A4-PDF输出]")
+        print("示例: python simple_binary.py input.jpg outputs/input_binary.jpg outputs/input_crop_box.jpg outputs/input_a4.pdf")
         sys.exit(1)
 
     input_path = sys.argv[1]
@@ -216,8 +384,14 @@ def main():
     else:
         box_output_path = outputs_dir / f"{input_file.stem}_crop_box{input_file.suffix}"
 
+    if len(sys.argv) >= 5:
+        pdf_output_path = Path(sys.argv[4])
+    else:
+        pdf_output_path = outputs_dir / f"{input_file.stem}_a4.pdf"
+
     binary_output_path.parent.mkdir(parents=True, exist_ok=True)
     box_output_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_output_path.parent.mkdir(parents=True, exist_ok=True)
 
     image = cv2.imread(input_path)
     if image is None:
@@ -260,15 +434,33 @@ def main():
     bbox, bbox_info = detect_bbox(binary)
 
     boxed = image.copy()
+    boundaries = []
+    pages = 0
+    max_col_width = 0
+    split_info = {}
     if bbox is not None:
         x, y, w, h = bbox
+        max_col_width = int(round(h / A4_RATIO))
+        max_col_width = max(1, min(max_col_width, w))
+
+        ink_mask, _ = get_ink_mask(binary)
+        roi_ink = ink_mask[y:y + h, x:x + w]
+        split_candidates, split_info = detect_split_candidates(roi_ink)
+        boundaries = build_column_boundaries(w, max_col_width, split_candidates)
+
+        for b in boundaries[1:-1]:
+            cv2.line(boxed, (x + b, y), (x + b, y + h - 1), (255, 128, 0), 1)
+
         cv2.rectangle(boxed, (x, y), (x + w - 1, y + h - 1), (0, 0, 255), 2)
+        pages = save_columns_to_a4_pdf(image, bbox, boundaries, pdf_output_path)
 
     cv2.imwrite(str(binary_output_path), binary)
     cv2.imwrite(str(box_output_path), boxed)
 
     print(f"\n✓ 已保存二值化图到: {binary_output_path}")
     print(f"✓ 已保存加框预览图到: {box_output_path}")
+    if bbox is not None:
+        print(f"✓ 已保存A4分页PDF到: {pdf_output_path}")
     print(f"  输入图片: {input_path}")
     print(f"  图片大小: {image.shape}")
     print(f"  二值图大小: {binary.shape}")
@@ -281,6 +473,10 @@ def main():
         print(
             f"  框检测尺寸: {bbox_info['detect_h']}x{bbox_info['detect_w']}, "
             f"scale={bbox_info['scale']:.4f}, pad={bbox_info['total_pad']}"
+        )
+        print(
+            f"  分页: max_col_width={max_col_width}, split_candidates={split_info.get('candidate_count', 0)}, "
+            f"列数={max(0, len(boundaries)-1)}, PDF页数={pages}"
         )
 
     print("\n说明:")
