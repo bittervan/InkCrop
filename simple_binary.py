@@ -23,9 +23,7 @@ BORDER_BAND_RATIO = 0.03
 BORDER_BAND_MIN = 24
 
 BBOX_DETECT_MAX_SIDE = 2400
-BBOX_PADDING = 12
-BBOX_EXTRA_PADDING = 12
-BBOX_SCALE_SAFETY = 2.0
+BBOX_PADDING_RATIO = 0.03
 BBOX_PROJ_RATIO = 0.002
 
 A4_WIDTH = 210.0
@@ -181,8 +179,8 @@ def detect_bbox(binary):
     else:
         left, top, right, bottom = left_s, top_s, right_s, bottom_s
 
-    scale_pad = int(np.ceil(BBOX_SCALE_SAFETY / scale)) if scale < 1.0 else 0
-    total_pad = BBOX_PADDING + BBOX_EXTRA_PADDING + scale_pad
+    raw_box_h = (bottom - top + 1)
+    total_pad = max(1, int(round(raw_box_h * BBOX_PADDING_RATIO)))
 
     left = max(0, left - total_pad)
     top = max(0, top - total_pad)
@@ -198,6 +196,7 @@ def detect_bbox(binary):
         "detect_w": small_w,
         "row_high": row_high,
         "col_high": col_high,
+        "raw_box_h": raw_box_h,
         "total_pad": total_pad,
     }
     return (left, top, right - left + 1, bottom - top + 1), info
@@ -475,7 +474,7 @@ def main():
         print(f"  检测框: x={x}, y={y}, w={w}, h={h}")
         print(
             f"  框检测尺寸: {bbox_info['detect_h']}x{bbox_info['detect_w']}, "
-            f"scale={bbox_info['scale']:.4f}, pad={bbox_info['total_pad']}"
+            f"scale={bbox_info['scale']:.4f}, pad={bbox_info['total_pad']} (h*3%, raw_h={bbox_info['raw_box_h']})"
         )
         print(
             f"  分页: max_col_width={max_col_width}, split_candidates={split_info.get('candidate_count', 0)}, "
