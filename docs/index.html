@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="InkCrop：书法长卷二值化、稳健框选、A4 自动分页导出工具。"
+    />
+    <title>InkCrop | 长卷裁切与 A4 分页</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-layer"></div>
+    <header class="site-header">
+      <div class="container nav-wrap">
+        <a class="brand" href="#top">
+          <span class="brand-ink">InkCrop</span>
+          <span class="brand-sub">Calligraphy Pipeline</span>
+        </a>
+        <nav class="nav">
+          <a href="#features">能力</a>
+          <a href="#quickstart">快速开始</a>
+          <a href="#gallery">效果</a>
+          <a href="#deploy">部署</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero container reveal">
+        <div class="hero-left">
+          <p class="hero-kicker">Open Source Tooling for Scroll Art</p>
+          <h1>把超长书法图<br />切成稳定、可打印的 A4 页面</h1>
+          <p class="hero-desc">
+            InkCrop 聚焦三件事：二值化、稳健框选、按右到左分页导出 PDF。
+            最新版本已优化长卷性能，并降低左右误裁风险。
+          </p>
+          <div class="hero-cta">
+            <a class="btn btn-solid" href="#quickstart">开始使用</a>
+            <a class="btn btn-outline" href="#deploy">发布到 GitHub Pages</a>
+          </div>
+          <ul class="hero-metrics">
+            <li><strong>6x+</strong><span>PDF 导出提速</span></li>
+            <li><strong>5mm</strong><span>A4 页面边距</span></li>
+            <li><strong>0.043%</strong><span>框外墨迹（示例）</span></li>
+          </ul>
+        </div>
+        <div class="hero-right">
+          <div class="command-card">
+            <h2>快速命令</h2>
+            <pre><code id="cmd-main">python simple_binary.py "tests/你的图片.jpg" "outputs/out_binary.jpg" "outputs/out_box.jpg" "outputs/out_a4.pdf"</code></pre>
+            <button class="copy-btn" data-copy-target="cmd-main">复制命令</button>
+            <p>支持单图处理与批处理脚本 `batch_binary.sh`。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" class="section container reveal">
+        <div class="section-head">
+          <h2>核心能力</h2>
+          <p>围绕“长卷书法可打印”做了专门优化。</p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <h3>稳健框选</h3>
+            <p>
+              使用降采样投影 + 原始外接框兜底策略，防止左右边缘字被激进裁掉。
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>极速导出</h3>
+            <p>
+              PDF 页先编码为临时 JPEG 再嵌入，显著减少 ReportLab 编码耗时。
+            </p>
+          </article>
+          <article class="feature-card">
+            <h3>长卷分页</h3>
+            <p>
+              自动检测切分候选并按右到左分页，控制列宽适配 A4 打印比例。
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="quickstart" class="section container reveal">
+        <div class="section-head">
+          <h2>快速开始</h2>
+          <p>本地执行 Python 脚本，输出二值图、框选图与 A4 PDF。</p>
+        </div>
+        <div class="steps">
+          <article class="step-card">
+            <h3>1. 安装依赖</h3>
+            <pre><code id="cmd-install">python -m pip install opencv-python numpy pillow reportlab scikit-image</code></pre>
+            <button class="copy-btn" data-copy-target="cmd-install">复制</button>
+          </article>
+          <article class="step-card">
+            <h3>2. 单图处理</h3>
+            <pre><code id="cmd-single">python simple_binary.py "tests/唐 褚遂良 阴符经21x394.jpg"</code></pre>
+            <button class="copy-btn" data-copy-target="cmd-single">复制</button>
+          </article>
+          <article class="step-card">
+            <h3>3. 批量处理</h3>
+            <pre><code id="cmd-batch">bash batch_binary.sh</code></pre>
+            <button class="copy-btn" data-copy-target="cmd-batch">复制</button>
+          </article>
+        </div>
+
+        <div class="param-panel">
+          <h3>常用参数与策略</h3>
+          <div class="param-grid">
+            <p><code>BBOX_DETECT_MAX_SIDE=2400</code>：框选检测降采样最大边。</p>
+            <p><code>BBOX_PADDING_RATIO=0.03</code>：检测框上下左右补边比例。</p>
+            <p><code>BBOX_MIN_PROJ_COVER_RATIO=0.85</code>：投影框兜底阈值。</p>
+            <p><code>PDF_PAGE_MARGIN_MM=5.0</code>：A4 页面边距（毫米）。</p>
+            <p><code>PDF_IMAGE_JPEG_QUALITY=90</code>：PDF 图像嵌入质量。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="gallery" class="section container reveal">
+        <div class="section-head">
+          <h2>效果示例</h2>
+          <p>示例区域来自同一张长卷，便于对比处理结果。</p>
+        </div>
+        <div class="gallery-grid">
+          <figure class="shot-card">
+            <img src="./assets/example-original.webp" alt="原图局部示例" loading="lazy" />
+            <figcaption>原图（局部）</figcaption>
+          </figure>
+          <figure class="shot-card">
+            <img src="./assets/example-binary.webp" alt="二值化结果示例" loading="lazy" />
+            <figcaption>二值化输出</figcaption>
+          </figure>
+          <figure class="shot-card">
+            <img src="./assets/example-box.webp" alt="框选结果示例" loading="lazy" />
+            <figcaption>框选预览输出</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section id="deploy" class="section container reveal">
+        <div class="section-head">
+          <h2>GitHub Pages 部署</h2>
+          <p>仓库内已包含自动部署 workflow，推送后即可发布。</p>
+        </div>
+        <ol class="deploy-list">
+          <li>将代码推送到 GitHub 仓库的默认分支（建议 <code>main</code>）。</li>
+          <li>在仓库设置中进入 <code>Settings -> Pages</code>。</li>
+          <li>
+            Source 选择 <code>GitHub Actions</code>，等待 workflow
+            完成部署。
+          </li>
+        </ol>
+        <p class="deploy-note">
+          页面内容来自 <code>docs/</code> 目录，入口为 <code>docs/index.html</code>。
+        </p>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container">
+        <p>InkCrop · Built for Chinese calligraphy scroll workflows.</p>
+      </div>
+    </footer>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
