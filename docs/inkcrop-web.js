@@ -96,7 +96,7 @@ function parseOptions() {
   const minCoverRatio = clamp(Number(dom.optMinCoverRatio.value || 0.85), 0.5, 1.0);
   const marginMm = clamp(Number(dom.optMarginMm.value || 5), 0, 30);
   const jpegQuality = clamp(Number(dom.optJpegQuality.value || 90), 40, 100);
-  const webMaxSide = clamp(Number(dom.optWebMaxSide.value || 16384), 2000, 20000);
+  const webMaxSide = clamp(Number(dom.optWebMaxSide.value || 24000), 2000, 50000);
   return {
     detectMaxSide,
     paddingRatio,
@@ -167,15 +167,35 @@ async function loadSelectedImage() {
     const srcW = image.naturalWidth;
     const srcH = image.naturalHeight;
     const maxSide = Math.max(srcW, srcH);
-    const scale = maxSide > options.webMaxSide ? options.webMaxSide / maxSide : 1;
-    const targetW = Math.max(1, Math.round(srcW * scale));
-    const targetH = Math.max(1, Math.round(srcH * scale));
+    const requestedScale = maxSide > options.webMaxSide ? options.webMaxSide / maxSide : 1;
 
     const canvas = document.createElement("canvas");
-    canvas.width = targetW;
-    canvas.height = targetH;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    ctx.drawImage(image, 0, 0, targetW, targetH);
+
+    // 若浏览器无法承载目标尺寸，自动降级到可用分辨率。
+    let scale = requestedScale;
+    let targetW = 0;
+    let targetH = 0;
+    let loaded = false;
+    for (let i = 0; i < 10; i += 1) {
+      targetW = Math.max(1, Math.round(srcW * scale));
+      targetH = Math.max(1, Math.round(srcH * scale));
+      try {
+        canvas.width = targetW;
+        canvas.height = targetH;
+        ctx.clearRect(0, 0, targetW, targetH);
+        ctx.drawImage(image, 0, 0, targetW, targetH);
+        // 触发一次读像素，尽早暴露潜在尺寸限制异常。
+        ctx.getImageData(Math.min(targetW - 1, 0), Math.min(targetH - 1, 0), 1, 1);
+        loaded = true;
+        break;
+      } catch (_) {
+        scale *= 0.9;
+      }
+    }
+    if (!loaded) {
+      throw new Error("图片尺寸超出浏览器处理上限，请手动降低“网页最大边”。");
+    }
 
     appState.sourceCanvas = canvas;
     appState.sourceName = file.name;
@@ -188,6 +208,11 @@ async function loadSelectedImage() {
     setDownloadButtonsEnabled(false, false);
     appState.result = null;
 
+    if (scale < requestedScale - 1e-6) {
+      appendLog(
+        `浏览器上限触发，自动降级到 ${targetW}x${targetH}（scale=${scale.toFixed(4)}）`
+      );
+    }
     if (scale < 1) {
       appendLog(
         `输入图过大，已自动缩图到 ${targetW}x${targetH}（原图 ${srcW}x${srcH}, scale=${scale.toFixed(4)}）`
