@@ -78,12 +78,13 @@ jobs:
 
   gitee-release:
     name: Publish Gitee Release
-    if: startsWith(github.ref, 'refs/tags/') && secrets.GITEE_TOKEN != ''
+    if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
       GITEE_OWNER: BitterVan
       GITEE_REPO: InkCrop
 
@@ -97,9 +98,13 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      - name: Skip Gitee publish when token is missing
+        if: env.GITEE_TOKEN == ''
+        run: echo "GITEE_TOKEN is empty; skip Gitee release publish."
+
       - name: Publish release assets to Gitee
+        if: env.GITEE_TOKEN != ''
         env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           python packaging/publish_gitee_release.py \
