@@ -64,16 +64,25 @@ python packaging/build.py --onedir
 - 自动发布 Release：
   - 推送标签（例如 `v1.0.0`）后会构建全部平台并把 `zip` 附件发布到 GitHub Release
 
-## 7) GitHub Actions 自动发布到 Gitee（仅 Token）
+## 7) 手动同步到 Gitee（本地脚本）
 
-工作流已支持：当 push `v*` 标签后，会在构建完成后自动把附件上传到 Gitee Release。
+已移除 GitHub Actions 的自动 Gitee 发布（跨境网络易超时）。
 
-需要在 GitHub 仓库 `Settings -> Secrets and variables -> Actions` 配置：
+使用本地脚本手动推送到 Gitee：
 
-- `GITEE_TOKEN`（必需）：Gitee 个人访问令牌（PAT）
+```bash
+bash scripts/push_gitee.sh
+```
 
-说明：
+默认行为：
 
-- 不需要保存 SSH 私钥。
-- 默认发布目标仓库是 `BitterVan/InkCrop`。
-- 如果 `GITEE_TOKEN` 未配置，Gitee 发布任务会自动跳过，不影响 GitHub Release。
+- 远端名：`gitee`
+- 远端地址：`git@gitee.com:BitterVan/InkCrop.git`
+- 推送分支：`main`
+- 同时推送全部 tags
+
+可选：指定分支（示例）
+
+```bash
+bash scripts/push_gitee.sh release
+```
