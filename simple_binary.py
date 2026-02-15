@@ -9,6 +9,41 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from skimage.segmentation import clear_border
+
+
+def remove_border_connected_ink(binary):
+    total_pixels = binary.size
+    white_pixels = int(cv2.countNonZero(binary))
+    black_pixels = int(total_pixels - white_pixels)
+
+    # 墨迹默认取面积较小的一类像素，兼容白墨迹或黑墨迹两种输出
+    ink_is_white = white_pixels <= black_pixels
+    ink_mask = (binary == 255) if ink_is_white else (binary == 0)
+
+    # 找到与图像边界连通的墨迹像素
+    inside_mask = clear_border(ink_mask, buffer_size=0)
+    border_connected = ink_mask & (~inside_mask)
+
+    # 只在边缘窄带内删除，避免“细桥连边”导致整块真实笔画被删
+    h, w = ink_mask.shape
+    border_band = max(12, int(round(min(h, w) * 0.01)))
+    edge_band = np.zeros_like(ink_mask, dtype=bool)
+    edge_band[:border_band, :] = True
+    edge_band[h - border_band:, :] = True
+    edge_band[:, :border_band] = True
+    edge_band[:, w - border_band:] = True
+
+    remove_mask = border_connected & edge_band
+    ink_mask_clean = ink_mask & (~remove_mask)
+    removed_pixels = int(np.count_nonzero(remove_mask))
+
+    if ink_is_white:
+        cleaned_binary = np.where(ink_mask_clean, 255, 0).astype(np.uint8)
+    else:
+        cleaned_binary = np.where(ink_mask_clean, 0, 255).astype(np.uint8)
+
+    return cleaned_binary, removed_pixels, border_band
 
 
 def main():
@@ -87,6 +122,9 @@ def main():
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
+    # 去掉与边缘连通的深色噪声，同时尽量保留真实笔画
+    binary, removed_pixels, border_band = remove_border_connected_ink(binary)
+
     # 保存二值化图
     cv2.imwrite(str(output_path), binary)
 
@@ -99,6 +137,7 @@ def main():
     print(f"  - 黑色区域 = 背景（纸张）")
     print(f"  - 模式: {mode}")
     print(f"  - 使用 Otsu 自动阈值 + 面积判断")
+    print(f"  - 边缘连通噪声已清除（边缘带宽: {border_band}px），移除像素: {removed_pixels}")
 
 
 if __name__ == "__main__":
